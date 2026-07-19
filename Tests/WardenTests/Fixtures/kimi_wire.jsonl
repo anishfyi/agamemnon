@@ -1,0 +1,6 @@
+{"timestamp":"2026-07-18T11:00:00.000Z","id":"kimi_1","model":"kimi-k2","usage":{"inputOther":1500,"output":400,"inputCacheRead":7000,"inputCacheCreation":200}}
+{"timestamp":"2026-07-18T11:01:00.000Z","id":"kimi_2","model":"kimi-k2","usage":{"inputOther":300,"output":100,"inputCacheRead":8000,"inputCacheCreation":50}}
+not-json-line
+{"timestamp":"2026-07-18T11:02:00.000Z","data":{"usage":{"inputOther":10,"output":5,"inputCacheRead":0,"inputCacheCreation":0}}}
+{"timestamp":1752832920,"usage":{"input_tokens":99,"output_tokens":11}}
+{"partial":
