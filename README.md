@@ -1,4 +1,4 @@
-# Warden
+# Agamemnon
 
 Native macOS menu-bar app that monitors token usage and token abuse across local AI coding CLIs: Claude Code (claude-work profile), Kimi Code CLI, and Cursor CLI.
 
