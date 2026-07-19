@@ -1,5 +1,5 @@
 import SwiftUI
-import WardenCore
+import AgamemnonCore
 
 struct SessionsView: View {
     @EnvironmentObject var appState: AppState

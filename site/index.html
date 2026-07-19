@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agamemnon: live token spend for AI coding CLIs</title>
+<meta name="description" content="Native macOS menu-bar app that watches token spend across Kimi Code CLI, Cursor CLI, and Claude Code (claude-work). No network, no telemetry.">
+<link rel="canonical" href="https://anishfyi.github.io/agamemnon/">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Agamemnon: live token spend for AI coding CLIs">
+<meta property="og:description" content="Watch kimi, cursor-agent, and claude-work token burn in real time from the menu bar. Everything stays on disk.">
+<meta property="og:url" content="https://anishfyi.github.io/agamemnon/">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Agamemnon">
+<meta name="twitter:description" content="Menu-bar token spend monitor for Kimi, Cursor CLI, and Claude Code.">
+<link rel="icon" href="assets/agamemnon-dark.svg" type="image/svg+xml">
+<style>
+  :root {
+    --ink: #12100E;
+    --ink-raise: #1C1814;
+    --cell: #3A3228;
+    --bone: #EFEDE5;
+    --bone-dim: #A39E94;
+    --bronze: #C9A227;
+    --ember: #8B4513;
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--ink);
+    color: var(--bone);
+    font-family: var(--sans);
+    line-height: 1.6;
+    font-size: 17px;
+  }
+  a { color: var(--bronze); text-decoration: none; }
+  a:hover, a:focus-visible { text-decoration: underline; text-underline-offset: 3px; }
+  a:focus-visible { outline: 2px solid var(--bronze); outline-offset: 3px; border-radius: 2px; }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 0 24px; }
+
+  header.wrap { padding: 72px 24px 56px; text-align: center; }
+  .mark { width: 96px; height: auto; margin-bottom: 20px; }
+  .wordmark {
+    font-family: var(--mono);
+    font-size: clamp(40px, 9vw, 72px);
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    line-height: 1;
+  }
+  .tagline {
+    font-size: clamp(18px, 3vw, 24px);
+    color: var(--bone);
+    max-width: 36ch;
+    margin: 16px auto 0;
+    font-weight: 500;
+  }
+  .sub {
+    color: var(--bone-dim);
+    margin: 14px auto 0;
+    max-width: 58ch;
+  }
+  .cta {
+    margin-top: 28px;
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+  }
+  .btn {
+    font-family: var(--mono);
+    font-size: 15px;
+    background: var(--ink-raise);
+    border: 1px solid var(--cell);
+    border-radius: 10px;
+    padding: 10px 16px;
+    color: var(--bone);
+    display: inline-block;
+  }
+  .btn:hover { text-decoration: none; border-color: var(--bronze); }
+  .btn b { color: var(--bronze); font-weight: 600; }
+
+  .sources {
+    margin-top: 48px;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 14px;
+    text-align: left;
+  }
+  .source {
+    background: var(--ink-raise);
+    border: 1px solid var(--cell);
+    border-radius: 12px;
+    padding: 18px;
+  }
+  .source .rank {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--bronze);
+  }
+  .source h3 {
+    font-family: var(--mono);
+    font-size: 17px;
+    margin-top: 6px;
+    font-weight: 600;
+  }
+  .source p {
+    font-size: 14px;
+    color: var(--bone-dim);
+    margin-top: 6px;
+  }
+
+  section.wrap { padding: 40px 24px; }
+  .eyebrow {
+    display: block;
+    font-family: var(--mono);
+    font-size: 13px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--bronze);
+  }
+  h2 {
+    font-family: var(--mono);
+    font-size: 26px;
+    font-weight: 600;
+    margin: 8px 0 6px;
+  }
+  .lead { color: var(--bone-dim); max-width: 62ch; margin-top: 10px; }
+
+  .features {
+    margin-top: 22px;
+    display: grid;
+    gap: 12px;
+  }
+  .feature {
+    background: var(--ink-raise);
+    border: 1px solid var(--cell);
+    border-radius: 12px;
+    padding: 16px 18px;
+    color: var(--bone-dim);
+  }
+  .feature b { color: var(--bone); font-weight: 600; }
+
+  pre {
+    margin-top: 18px;
+    background: var(--ink-raise);
+    border: 1px solid var(--cell);
+    border-radius: 12px;
+    padding: 16px 18px;
+    overflow-x: auto;
+    font-family: var(--mono);
+    font-size: 14px;
+    color: var(--bone);
+  }
+
+  footer {
+    padding: 48px 0 64px;
+    color: var(--bone-dim);
+    font-size: 14.5px;
+    border-top: 1px solid var(--cell);
+    margin-top: 40px;
+    text-align: center;
+  }
+  footer .wrap { display: flex; gap: 18px; flex-wrap: wrap; justify-content: center; }
+</style>
+</head>
+<body>
+
+<header class="wrap">
+  <picture>
+    <source media="(prefers-color-scheme: light)" srcset="assets/agamemnon-light.svg">
+    <img class="mark" src="assets/agamemnon-dark.svg" alt="Agamemnon helmet mark" width="96" height="115">
+  </picture>
+  <h1 class="wordmark">Agamemnon</h1>
+  <p class="tagline">Live token spend from the menu bar.</p>
+  <p class="sub">You run three CLIs. Agamemnon watches them all: Kimi Code, Cursor agent, and Claude Code (claude-work). Input, output, cache, burn rate, rolling limits, and estimated cost. Nothing leaves your machine.</p>
+  <div class="cta">
+    <a class="btn" href="https://github.com/anishfyi/agamemnon"><b>git clone</b> anishfyi/agamemnon</a>
+    <a class="btn" href="https://github.com/anishfyi/agamemnon#build">./build.sh</a>
+  </div>
+
+  <div class="sources">
+    <div class="source">
+      <span class="rank">Priority 1</span>
+      <h3>Kimi Code CLI</h3>
+      <p>Wire logs at <code>~/.kimi-code/sessions/</code></p>
+    </div>
+    <div class="source">
+      <span class="rank">Priority 2</span>
+      <h3>Cursor CLI</h3>
+      <p>Activity always; tokens when locally available</p>
+    </div>
+    <div class="source">
+      <span class="rank">Priority 3</span>
+      <h3>Claude Code (work)</h3>
+      <p>Transcripts at <code>~/.claude-work/projects/</code></p>
+    </div>
+  </div>
+</header>
+
+<section class="wrap" id="features">
+  <span class="eyebrow">dashboard</span>
+  <h2>What you see</h2>
+  <p class="lead">One real-time panel per source, plus a totals strip across the top.</p>
+  <div class="features">
+    <div class="feature"><b>Menu-bar helmet</b> with today's total tokens. Turns warning-colored when abuse alerts fire.</div>
+    <div class="feature"><b>5-hour and weekly windows</b> as progress bars with configurable per-source limits. Warning at 70%, critical at 90%.</div>
+    <div class="feature"><b>Burn rate</b> in tokens/min over the last 15 minutes, plus estimated USD cost from an editable pricing table.</div>
+    <div class="feature"><b>Sessions and abuse rules</b>: burn spike, daily cap, cache-miss anomaly, loop detection. All thresholds configurable.</div>
+    <div class="feature"><b>Incremental parsers</b> with a local SQLite cache. Restarts are cheap. Migrates from Warden on first run.</div>
+  </div>
+</section>
+
+<section class="wrap" id="build">
+  <span class="eyebrow">install</span>
+  <h2>Build and run</h2>
+  <p class="lead">macOS 13+, Swift 5.9+, Xcode Command Line Tools. Unsigned personal-tool distribution.</p>
+  <pre>git clone https://github.com/anishfyi/agamemnon.git
+cd agamemnon
+./build.sh
+open Agamemnon.app</pre>
+  <p class="lead" style="margin-top:14px">If Gatekeeper blocks the app: <code>xattr -cr Agamemnon.app</code></p>
+</section>
+
+<section class="wrap" id="privacy">
+  <span class="eyebrow">privacy</span>
+  <h2>On disk only</h2>
+  <p class="lead">No network access. No telemetry. Data lives at <code>~/Library/Application Support/Agamemnon/agamemnon.db</code>.</p>
+</section>
+
+<footer>
+  <div class="wrap">
+    <span>Personal tool</span>
+    <a href="https://github.com/anishfyi/agamemnon">GitHub</a>
+    <a href="https://anishfyi.github.io/agamemnon/">Docs</a>
+  </div>
+</footer>
+
+</body>
+</html>

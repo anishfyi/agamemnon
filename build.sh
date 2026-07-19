@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build Warden.app from the Swift package.
+# Build Agamemnon.app from the Swift package.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -7,41 +7,43 @@ cd "$ROOT"
 
 CONFIG="${1:-release}"
 PRODUCT_DIR="$ROOT/.build/$CONFIG"
-APP_DIR="$ROOT/Warden.app"
+APP_DIR="$ROOT/Agamemnon.app"
 
 echo "==> Running tests"
-swift build -c debug --product WardenTests
-TEST_BIN="$(find "$ROOT/.build" -type f -name WardenTests -path '*/debug/*' | head -n1)"
+swift build -c debug --product AgamemnonTests
+TEST_BIN="$(find "$ROOT/.build" -type f -name AgamemnonTests -path '*/debug/*' | head -n1)"
 if [[ -z "$TEST_BIN" || ! -x "$TEST_BIN" ]]; then
-  echo "error: WardenTests binary not found" >&2
+  echo "error: AgamemnonTests binary not found" >&2
   exit 1
 fi
 "$TEST_BIN"
 
-echo "==> Building Warden ($CONFIG)"
-swift build -c "$CONFIG" --product Warden
+echo "==> Building Agamemnon ($CONFIG)"
+swift build -c "$CONFIG" --product Agamemnon
 
-BIN="$PRODUCT_DIR/Warden"
+BIN="$PRODUCT_DIR/Agamemnon"
 if [[ ! -x "$BIN" ]]; then
-  # SwiftPM may nest under arch triples
-  BIN="$(find "$ROOT/.build" -type f -name Warden -path "*/$CONFIG/*" | head -n1)"
+  BIN="$(find "$ROOT/.build" -type f -name Agamemnon -path "*/$CONFIG/*" | head -n1)"
 fi
 if [[ -z "${BIN}" || ! -x "$BIN" ]]; then
-  echo "error: Warden binary not found after build" >&2
+  echo "error: Agamemnon binary not found after build" >&2
   exit 1
 fi
 
-echo "==> Assembling Warden.app"
+echo "==> Assembling Agamemnon.app"
 rm -rf "$APP_DIR"
 mkdir -p "$APP_DIR/Contents/MacOS"
 mkdir -p "$APP_DIR/Contents/Resources"
-cp "$BIN" "$APP_DIR/Contents/MacOS/Warden"
-chmod +x "$APP_DIR/Contents/MacOS/Warden"
+cp "$BIN" "$APP_DIR/Contents/MacOS/Agamemnon"
+chmod +x "$APP_DIR/Contents/MacOS/Agamemnon"
 
-# Copy linked dylibs / swift libs if present beside the binary
 BIN_DIR="$(dirname "$BIN")"
 if [[ -d "$BIN_DIR" ]]; then
   find "$BIN_DIR" -maxdepth 1 \( -name '*.dylib' -o -name '*.so' \) -exec cp {} "$APP_DIR/Contents/MacOS/" \; 2>/dev/null || true
+fi
+
+if [[ -d "$ROOT/assets" ]]; then
+  cp -R "$ROOT/assets" "$APP_DIR/Contents/Resources/"
 fi
 
 cat > "$APP_DIR/Contents/Info.plist" <<'PLIST'
@@ -52,15 +54,15 @@ cat > "$APP_DIR/Contents/Info.plist" <<'PLIST'
   <key>CFBundleDevelopmentRegion</key>
   <string>en</string>
   <key>CFBundleExecutable</key>
-  <string>Warden</string>
+  <string>Agamemnon</string>
   <key>CFBundleIdentifier</key>
-  <string>local.warden.app</string>
+  <string>com.anishfyi.agamemnon</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>
-  <string>Warden</string>
+  <string>Agamemnon</string>
   <key>CFBundleDisplayName</key>
-  <string>Warden</string>
+  <string>Agamemnon</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
@@ -81,7 +83,6 @@ cat > "$APP_DIR/Contents/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
-# PkgInfo
 echo -n 'APPL????' > "$APP_DIR/Contents/PkgInfo"
 
 echo "==> Built $APP_DIR"

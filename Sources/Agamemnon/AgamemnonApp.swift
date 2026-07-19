@@ -2,10 +2,11 @@ import SwiftUI
 import AppKit
 import UserNotifications
 import ServiceManagement
-import WardenCore
+import AgamemnonCore
 
 @main
-struct WardenApp: App {
+struct AgamemnonApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var appState = AppState()
 
     var body: some Scene {
@@ -18,7 +19,7 @@ struct WardenApp: App {
         }
         .menuBarExtraStyle(.menu)
 
-        Window("Warden", id: "admin") {
+        Window("Agamemnon", id: "admin") {
             AdminPanelView()
                 .environmentObject(appState)
                 .frame(minWidth: 900, minHeight: 600)
@@ -34,15 +35,15 @@ final class AppState: ObservableObject {
     @Published var showAdmin = false
 
     let engine: MonitorEngine
-    let db: WardenDatabase
+    let db: AgamemnonDatabase
 
     init() {
-        let database: WardenDatabase
+        let database: AgamemnonDatabase
         do {
-            database = try WardenDatabase()
+            database = try AgamemnonDatabase()
         } catch {
             // Fallback to temp db so the app still launches
-            database = try! WardenDatabase(path: NSTemporaryDirectory() + "warden-fallback.db")
+            database = try! AgamemnonDatabase(path: NSTemporaryDirectory() + "agamemnon-fallback.db")
         }
         self.db = database
         let loaded = SettingsStore.load()
@@ -59,22 +60,24 @@ final class AppState: ObservableObject {
             }
         }
         requestNotificationPermission()
-        engine.start()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            self?.engine.start()
+        }
     }
 
     func openAdmin() {
         NSApp.setActivationPolicy(.accessory)
-        if let url = URL(string: "warden://admin") {
+        if let url = URL(string: "agamemnon://admin") {
             _ = url
         }
         // Open via Window environment; use NSApp windows
-        for window in NSApp.windows where window.title == "Warden" {
+        for window in NSApp.windows where window.title == "Agamemnon" {
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
             return
         }
         // Fallback: open via notification to openWindow
-        NotificationCenter.default.post(name: .wardenOpenAdmin, object: nil)
+        NotificationCenter.default.post(name: .agamemnonOpenAdmin, object: nil)
     }
 
     func saveSettings() {
@@ -111,7 +114,7 @@ final class AppState: ObservableObject {
 
     private static func notify(_ alert: AbuseAlert) {
         let content = UNMutableNotificationContent()
-        content.title = "Warden: \(alert.kind.displayName)"
+        content.title = "Agamemnon: \(alert.kind.displayName)"
         content.body = alert.message
         content.sound = .default
         let req = UNNotificationRequest(identifier: alert.id, content: content, trigger: nil)
@@ -120,5 +123,5 @@ final class AppState: ObservableObject {
 }
 
 extension Notification.Name {
-    static let wardenOpenAdmin = Notification.Name("wardenOpenAdmin")
+    static let agamemnonOpenAdmin = Notification.Name("agamemnonOpenAdmin")
 }

@@ -2,7 +2,7 @@ import Foundation
 
 public enum AbuseEngine {
     /// Evaluate rules against the database and return newly fired alerts.
-    public static func evaluate(db: WardenDatabase, thresholds: AlertThresholds) -> [AbuseAlert] {
+    public static func evaluate(db: AgamemnonDatabase, thresholds: AlertThresholds) -> [AbuseAlert] {
         var fired: [AbuseAlert] = []
         fired.append(contentsOf: checkBurnSpike(db: db, thresholds: thresholds))
         fired.append(contentsOf: checkDailyCap(db: db, thresholds: thresholds))
@@ -15,7 +15,7 @@ public enum AbuseEngine {
     }
 
     // Burn spike: tokens/min over last 15 min > 3x trailing 7-day hourly average (as tokens/min)
-    private static func checkBurnSpike(db: WardenDatabase, thresholds: AlertThresholds) -> [AbuseAlert] {
+    private static func checkBurnSpike(db: AgamemnonDatabase, thresholds: AlertThresholds) -> [AbuseAlert] {
         let now = Date()
         let last15 = now.addingTimeInterval(-15 * 60)
         let weekAgo = now.addingTimeInterval(-7 * 24 * 3600)
@@ -47,7 +47,7 @@ public enum AbuseEngine {
         return alerts
     }
 
-    private static func checkDailyCap(db: WardenDatabase, thresholds: AlertThresholds) -> [AbuseAlert] {
+    private static func checkDailyCap(db: AgamemnonDatabase, thresholds: AlertThresholds) -> [AbuseAlert] {
         let start = Calendar.current.startOfDay(for: Date())
         var alerts: [AbuseAlert] = []
         for source in TokenSource.allCases {
@@ -68,7 +68,7 @@ public enum AbuseEngine {
         return alerts
     }
 
-    private static func checkCacheMiss(db: WardenDatabase, thresholds: AlertThresholds) -> [AbuseAlert] {
+    private static func checkCacheMiss(db: AgamemnonDatabase, thresholds: AlertThresholds) -> [AbuseAlert] {
         var alerts: [AbuseAlert] = []
         let sessions = db.sessions(limit: 50)
         for session in sessions {
@@ -97,7 +97,7 @@ public enum AbuseEngine {
         return alerts
     }
 
-    private static func checkLoop(db: WardenDatabase, thresholds: AlertThresholds) -> [AbuseAlert] {
+    private static func checkLoop(db: AgamemnonDatabase, thresholds: AlertThresholds) -> [AbuseAlert] {
         var alerts: [AbuseAlert] = []
         let window = TimeInterval(thresholds.loopWindowSeconds)
         let sessions = db.sessions(limit: 50)

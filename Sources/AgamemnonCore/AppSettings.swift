@@ -1,5 +1,49 @@
 import Foundation
 
+public struct SourceWindowLimits: Codable, Sendable, Equatable {
+    public var fiveHourTokens: Int
+    public var weeklyTokens: Int
+
+    public init(fiveHourTokens: Int = 5_000_000, weeklyTokens: Int = 25_000_000) {
+        self.fiveHourTokens = fiveHourTokens
+        self.weeklyTokens = weeklyTokens
+    }
+}
+
+public struct PerSourceLimits: Codable, Sendable, Equatable {
+    public var kimi: SourceWindowLimits
+    public var cursor: SourceWindowLimits
+    public var claudeWork: SourceWindowLimits
+
+    public init(
+        kimi: SourceWindowLimits = SourceWindowLimits(fiveHourTokens: 3_000_000, weeklyTokens: 15_000_000),
+        cursor: SourceWindowLimits = SourceWindowLimits(fiveHourTokens: 5_000_000, weeklyTokens: 25_000_000),
+        claudeWork: SourceWindowLimits = SourceWindowLimits(fiveHourTokens: 5_000_000, weeklyTokens: 30_000_000)
+    ) {
+        self.kimi = kimi
+        self.cursor = cursor
+        self.claudeWork = claudeWork
+    }
+
+    public static let `default` = PerSourceLimits()
+
+    public func limits(for source: DashboardSource) -> SourceWindowLimits {
+        switch source {
+        case .kimi: return kimi
+        case .cursor: return cursor
+        case .claudeWork: return claudeWork
+        }
+    }
+
+    public mutating func setLimits(_ limits: SourceWindowLimits, for source: DashboardSource) {
+        switch source {
+        case .kimi: kimi = limits
+        case .cursor: cursor = limits
+        case .claudeWork: claudeWork = limits
+        }
+    }
+}
+
 public struct AlertThresholds: Codable, Sendable, Equatable {
     public var burnSpikeMultiplier: Double
     public var dailyCapTokens: Int
@@ -97,6 +141,7 @@ public struct AppSettings: Codable, Sendable, Equatable {
     public var toggles: SourceToggles
     public var pricing: [ModelPricing]
     public var thresholds: AlertThresholds
+    public var sourceLimits: PerSourceLimits
     public var pollIntervalSeconds: Int
     public var launchAtLogin: Bool
     public var paused: Bool
@@ -106,7 +151,8 @@ public struct AppSettings: Codable, Sendable, Equatable {
         toggles: SourceToggles = .default,
         pricing: [ModelPricing] = AppSettings.defaultPricing,
         thresholds: AlertThresholds = .default,
-        pollIntervalSeconds: Int = 30,
+        sourceLimits: PerSourceLimits = .default,
+        pollIntervalSeconds: Int = 5,
         launchAtLogin: Bool = false,
         paused: Bool = false
     ) {
@@ -114,6 +160,7 @@ public struct AppSettings: Codable, Sendable, Equatable {
         self.toggles = toggles
         self.pricing = pricing
         self.thresholds = thresholds
+        self.sourceLimits = sourceLimits
         self.pollIntervalSeconds = pollIntervalSeconds
         self.launchAtLogin = launchAtLogin
         self.paused = paused
@@ -130,6 +177,34 @@ public struct AppSettings: Codable, Sendable, Equatable {
     ]
 
     public static let `default` = AppSettings()
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        paths = try c.decode(SourcePaths.self, forKey: .paths)
+        toggles = try c.decode(SourceToggles.self, forKey: .toggles)
+        pricing = try c.decodeIfPresent([ModelPricing].self, forKey: .pricing) ?? AppSettings.defaultPricing
+        thresholds = try c.decodeIfPresent(AlertThresholds.self, forKey: .thresholds) ?? .default
+        sourceLimits = try c.decodeIfPresent(PerSourceLimits.self, forKey: .sourceLimits) ?? .default
+        pollIntervalSeconds = try c.decodeIfPresent(Int.self, forKey: .pollIntervalSeconds) ?? 5
+        launchAtLogin = try c.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? false
+        paused = try c.decodeIfPresent(Bool.self, forKey: .paused) ?? false
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case paths, toggles, pricing, thresholds, sourceLimits, pollIntervalSeconds, launchAtLogin, paused
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(paths, forKey: .paths)
+        try c.encode(toggles, forKey: .toggles)
+        try c.encode(pricing, forKey: .pricing)
+        try c.encode(thresholds, forKey: .thresholds)
+        try c.encode(sourceLimits, forKey: .sourceLimits)
+        try c.encode(pollIntervalSeconds, forKey: .pollIntervalSeconds)
+        try c.encode(launchAtLogin, forKey: .launchAtLogin)
+        try c.encode(paused, forKey: .paused)
+    }
 
     public func price(for model: String) -> ModelPricing {
         let lower = model.lowercased()
@@ -163,17 +238,29 @@ public struct AppSettings: Codable, Sendable, Equatable {
 public enum SettingsStore {
     private static var url: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let dir = base.appendingPathComponent("Warden", isDirectory: true)
+        let dir = base.appendingPathComponent("Agamemnon", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("settings.json")
     }
 
     public static func load() -> AppSettings {
+        migrateLegacySettingsIfNeeded()
         guard let data = try? Data(contentsOf: url),
               let settings = try? JSONDecoder().decode(AppSettings.self, from: data) else {
             return .default
         }
         return settings
+    }
+
+    private static func migrateLegacySettingsIfNeeded() {
+        let fm = FileManager.default
+        let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let wardenDir = base.appendingPathComponent("Warden", isDirectory: true)
+        let legacy = wardenDir.appendingPathComponent("settings.json")
+        let current = url
+        guard fm.fileExists(atPath: legacy.path), !fm.fileExists(atPath: current.path) else { return }
+        try? fm.createDirectory(at: current.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? fm.copyItem(at: legacy, to: current)
     }
 
     public static func save(_ settings: AppSettings) {

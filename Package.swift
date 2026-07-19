@@ -2,29 +2,29 @@
 import PackageDescription
 
 let package = Package(
-    name: "Warden",
+    name: "Agamemnon",
     platforms: [.macOS(.v13)],
     products: [
-        .executable(name: "Warden", targets: ["Warden"]),
-        .executable(name: "WardenTests", targets: ["WardenTests"]),
-        .library(name: "WardenCore", targets: ["WardenCore"]),
+        .executable(name: "Agamemnon", targets: ["Agamemnon"]),
+        .executable(name: "AgamemnonTests", targets: ["AgamemnonTests"]),
+        .library(name: "AgamemnonCore", targets: ["AgamemnonCore"]),
     ],
     targets: [
         .target(
-            name: "WardenCore",
-            path: "Sources/WardenCore"
+            name: "AgamemnonCore",
+            path: "Sources/AgamemnonCore"
         ),
         .executableTarget(
-            name: "Warden",
-            dependencies: ["WardenCore"],
-            path: "Sources/Warden"
+            name: "Agamemnon",
+            dependencies: ["AgamemnonCore"],
+            path: "Sources/Agamemnon"
         ),
         // Standalone test runner (works with Command Line Tools; no XCTest / full Xcode required).
-        // Fixtures live under Tests/WardenTests/Fixtures.
+        // Fixtures live under Tests/AgamemnonTests/Fixtures.
         .executableTarget(
-            name: "WardenTests",
-            dependencies: ["WardenCore"],
-            path: "Tests/WardenTests",
+            name: "AgamemnonTests",
+            dependencies: ["AgamemnonCore"],
+            path: "Tests/AgamemnonTests",
             resources: [
                 .copy("Fixtures"),
             ]

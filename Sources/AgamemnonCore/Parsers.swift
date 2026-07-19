@@ -284,6 +284,32 @@ public struct CursorParseResult: Sendable {
 }
 
 public enum CursorParser {
+    public static func discoverTokenFiles(debugLogs: String) -> [String] {
+        discoverTokenFiles(in: debugLogs)
+    }
+
+    public static func discoverTokenFiles(chats: String) -> [String] {
+        discoverTokenFiles(in: chats)
+    }
+
+    private static func discoverTokenFiles(in root: String) -> [String] {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: root) else { return [] }
+        var results: [String] = []
+        guard let enumerator = fm.enumerator(atPath: root) else { return [] }
+        while let rel = enumerator.nextObject() as? String {
+            let name = (rel as NSString).lastPathComponent.lowercased()
+            if name.hasSuffix(".jsonl") || name.hasSuffix(".json") || name.hasSuffix(".log") {
+                results.append((root as NSString).appendingPathComponent(rel))
+            }
+        }
+        return results
+    }
+
+    public static func extractFromJSONPublic(_ obj: Any, sessionId: String, project: String) -> [UsageEvent] {
+        extractFromJSON(obj, sessionId: sessionId, project: project)
+    }
+
     public static func parse(
         trackingDB: String,
         debugLogs: String,

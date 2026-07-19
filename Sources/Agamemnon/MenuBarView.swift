@@ -1,5 +1,6 @@
 import SwiftUI
-import WardenCore
+import AppKit
+import AgamemnonCore
 
 struct MenuBarLabel: View {
     @EnvironmentObject var appState: AppState
@@ -7,8 +8,14 @@ struct MenuBarLabel: View {
     var body: some View {
         let total = appState.snapshot.todayTotal.totalTokens
         let warning = appState.snapshot.activeAlerts > 0
-        Text("⛨ \(TokenFormat.compact(total))")
-            .foregroundStyle(warning ? Color.orange : Color.primary)
+        Label {
+            Text(TokenFormat.compact(total))
+                .monospacedDigit()
+        } icon: {
+            MenuBarIconView()
+        }
+        .labelStyle(.titleAndIcon)
+        .foregroundStyle(warning ? Color.orange : Color.primary)
     }
 }
 
@@ -23,10 +30,10 @@ struct MenuBarView: View {
         Text("Today: \(TokenFormat.compact(snap.todayTotal.totalTokens))")
         Divider()
 
-        ForEach(TokenSource.allCases) { source in
-            if settings.toggles.isEnabled(source) {
-                let u = snap.todayBySource[source] ?? .zero
-                Text("\(source.displayName): \(TokenFormat.compact(u.totalTokens))")
+        ForEach(DashboardSource.allCases) { dashSource in
+            if settings.toggles.isEnabled(dashSource.tokenSource) {
+                let u = snap.todayBySource[dashSource.tokenSource] ?? .zero
+                Text("\(dashSource.shortName): \(TokenFormat.compact(u.totalTokens))")
             }
         }
 
@@ -43,7 +50,7 @@ struct MenuBarView: View {
             .foregroundStyle(snap.activeAlerts > 0 ? .orange : .primary)
 
         Divider()
-        Button("Open Warden") {
+        Button("Open Agamemnon") {
             openWindow(id: "admin")
             NSApp.activate(ignoringOtherApps: true)
         }
@@ -51,10 +58,8 @@ struct MenuBarView: View {
             appState.togglePause()
         }
         Divider()
-        Button("Quit Warden") {
+        Button("Quit Agamemnon") {
             NSApp.terminate(nil)
         }
     }
 }
-
-import AppKit
