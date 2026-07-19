@@ -1,5 +1,66 @@
 import Foundation
 
+public enum DashboardSource: String, Codable, CaseIterable, Sendable, Identifiable {
+    case kimi = "kimi"
+    case cursor = "cursor"
+    case claudeWork = "claude-work"
+
+    public var id: String { rawValue }
+
+    public var tokenSource: TokenSource {
+        switch self {
+        case .kimi: return .kimi
+        case .cursor: return .cursor
+        case .claudeWork: return .claudeWork
+        }
+    }
+
+    public var displayName: String {
+        switch self {
+        case .kimi: return "Kimi Code CLI"
+        case .cursor: return "Cursor CLI"
+        case .claudeWork: return "Claude Code (claude-work)"
+        }
+    }
+
+    public var shortName: String {
+        switch self {
+        case .kimi: return "kimi"
+        case .cursor: return "cursor"
+        case .claudeWork: return "claude-work"
+        }
+    }
+}
+
+public enum SpendState: String, Sendable {
+    case ok
+    case warning
+    case critical
+
+    public static func from(ratio: Double) -> SpendState {
+        if ratio >= 0.90 { return .critical }
+        if ratio >= 0.70 { return .warning }
+        return .ok
+    }
+}
+
+public struct SourceSpendStats: Sendable, Identifiable {
+    public var id: String { source.rawValue }
+    public var source: DashboardSource
+    public var today: TokenUsage
+    public var fiveHour: TokenUsage
+    public var sevenDay: TokenUsage
+    public var burnPerMinute: Double
+    public var estimatedCost: Double
+    public var fiveHourReset: Date?
+    public var weeklyReset: Date?
+    public var fiveHourRatio: Double
+    public var weeklyRatio: Double
+    public var state: SpendState
+    public var tokensUnavailable: Bool
+    public var activityNote: String
+}
+
 public enum TokenSource: String, Codable, CaseIterable, Sendable, Identifiable {
     case claudeWork = "claude-work"
     case claude = "claude"
@@ -252,5 +313,12 @@ public enum TokenFormat {
         if h > 0 { return "\(h)h \(m)m" }
         if m > 0 { return "\(m)m" }
         return "\(s)s"
+    }
+
+    public static func resetTime(_ date: Date?) -> String {
+        guard let date else { return "n/a" }
+        let remaining = date.timeIntervalSinceNow
+        if remaining <= 0 { return "now" }
+        return "resets in \(duration(remaining))"
     }
 }

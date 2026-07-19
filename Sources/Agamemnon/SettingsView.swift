@@ -1,5 +1,5 @@
 import SwiftUI
-import WardenCore
+import AgamemnonCore
 
 struct SettingsView: View {
     @EnvironmentObject var appState: AppState
@@ -25,6 +25,12 @@ struct SettingsView: View {
                 pathField("Tracking DB", text: $appState.settings.paths.cursorTrackingDB)
                 pathField("Debug logs", text: $appState.settings.paths.cursorDebugLogs)
                 pathField("Chats", text: $appState.settings.paths.cursorChats)
+            }
+
+            Section("Source limits") {
+                sourceLimitFields("Kimi", limits: $appState.settings.sourceLimits.kimi)
+                sourceLimitFields("Cursor CLI", limits: $appState.settings.sourceLimits.cursor)
+                sourceLimitFields("Claude-work", limits: $appState.settings.sourceLimits.claudeWork)
             }
 
             Section("Alert thresholds") {
@@ -110,6 +116,20 @@ struct SettingsView: View {
             pricingError = nil
         } catch {
             pricingError = "JSON parse error: \(error.localizedDescription)"
+        }
+    }
+
+    @ViewBuilder
+    private func sourceLimitFields(_ name: String, limits: Binding<SourceWindowLimits>) -> some View {
+        Group {
+            LabeledContent("\(name) 5-hour limit (tokens)") {
+                TextField("", value: limits.fiveHourTokens, format: .number)
+                    .frame(width: 120)
+            }
+            LabeledContent("\(name) weekly limit (tokens)") {
+                TextField("", value: limits.weeklyTokens, format: .number)
+                    .frame(width: 120)
+            }
         }
     }
 }

@@ -3,7 +3,7 @@ import SQLite3
 
 private let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
-public final class WardenDatabase: @unchecked Sendable {
+public final class AgamemnonDatabase: @unchecked Sendable {
     private var db: OpaquePointer?
     private let lock = NSLock()
     public let path: String
@@ -13,12 +13,23 @@ public final class WardenDatabase: @unchecked Sendable {
             self.path = path
         } else {
             let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-            let dir = base.appendingPathComponent("Warden", isDirectory: true)
+            let dir = base.appendingPathComponent("Agamemnon", isDirectory: true)
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            self.path = dir.appendingPathComponent("warden.db").path
+            Self.migrateLegacyDatabaseIfNeeded(into: dir)
+            self.path = dir.appendingPathComponent("agamemnon.db").path
         }
         try open()
         try migrate()
+    }
+
+    private static func migrateLegacyDatabaseIfNeeded(into agamemnonDir: URL) {
+        let fm = FileManager.default
+        let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let wardenDir = base.appendingPathComponent("Warden", isDirectory: true)
+        let legacyDB = wardenDir.appendingPathComponent("warden.db")
+        let newDB = agamemnonDir.appendingPathComponent("agamemnon.db")
+        guard fm.fileExists(atPath: legacyDB.path), !fm.fileExists(atPath: newDB.path) else { return }
+        try? fm.copyItem(at: legacyDB, to: newDB)
     }
 
     deinit {
@@ -288,6 +299,24 @@ public final class WardenDatabase: @unchecked Sendable {
                 cacheCreationTokens: Int(sqlite3_column_int64(stmt, 2)),
                 cacheReadTokens: Int(sqlite3_column_int64(stmt, 3))
             )
+        }
+    }
+
+    public func oldestEventTimestamp(from: Date, to: Date, source: TokenSource) -> Date? {
+        withLock {
+            let sql = """
+            SELECT MIN(timestamp) FROM usage_events
+            WHERE timestamp >= ? AND timestamp < ? AND source = ?
+            """
+            var stmt: OpaquePointer?
+            defer { sqlite3_finalize(stmt) }
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
+            sqlite3_bind_double(stmt, 1, from.timeIntervalSince1970)
+            sqlite3_bind_double(stmt, 2, to.timeIntervalSince1970)
+            sqlite3_bind_text(stmt, 3, source.rawValue, -1, SQLITE_TRANSIENT)
+            guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
+            if sqlite3_column_type(stmt, 0) == SQLITE_NULL { return nil }
+            return Date(timeIntervalSince1970: sqlite3_column_double(stmt, 0))
         }
     }
 

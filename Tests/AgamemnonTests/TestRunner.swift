@@ -1,9 +1,9 @@
 import Foundation
 import SQLite3
-import WardenCore
+import AgamemnonCore
 
 @main
-struct WardenTestRunner {
+struct AgamemnonTestRunner {
     static func main() {
         var failed = 0
         failed += run("ClaudeParser.parsesAndDedupes", testClaudeParsesAndDedupes)
@@ -43,7 +43,7 @@ struct WardenTestRunner {
                 .deletingLastPathComponent()
                 .appendingPathComponent("Fixtures/\(name)"),
             URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-                .appendingPathComponent("Tests/WardenTests/Fixtures/\(name)"),
+                .appendingPathComponent("Tests/AgamemnonTests/Fixtures/\(name)"),
         ]
         // Bundle.module is available when SPM embeds resources
         #if SWIFT_PACKAGE
@@ -149,8 +149,8 @@ struct WardenTestRunner {
         try createCursorActivityDB(at: dbPath)
         let result = CursorParser.parse(
             trackingDB: dbPath,
-            debugLogs: "/tmp/warden-nonexistent-debug",
-            chats: "/tmp/warden-nonexistent-chats"
+            debugLogs: "/tmp/agamemnon-nonexistent-debug",
+            chats: "/tmp/agamemnon-nonexistent-chats"
         )
         try expect(result.activityOnly)
         try expect(result.note == "cursor: activity only, tokens unavailable")
@@ -170,7 +170,7 @@ struct WardenTestRunner {
         let result = CursorParser.parse(
             trackingDB: dbPath,
             debugLogs: logs.path,
-            chats: "/tmp/warden-nonexistent-chats"
+            chats: "/tmp/agamemnon-nonexistent-chats"
         )
         try expect(!result.activityOnly)
         try expect(result.events.contains { $0.usage.totalTokens > 0 })
@@ -199,8 +199,8 @@ struct WardenTestRunner {
 
     static func testDatabaseInsert() throws {
         let path = FileManager.default.temporaryDirectory
-            .appendingPathComponent("warden-test-\(UUID().uuidString).db").path
-        let db = try WardenDatabase(path: path)
+            .appendingPathComponent("agamemnon-test-\(UUID().uuidString).db").path
+        let db = try AgamemnonDatabase(path: path)
         let e1 = UsageEvent(
             source: .claudeWork,
             sessionId: "s1",
@@ -219,8 +219,8 @@ struct WardenTestRunner {
 
     static func testDailyCapAlert() throws {
         let path = FileManager.default.temporaryDirectory
-            .appendingPathComponent("warden-alert-\(UUID().uuidString).db").path
-        let db = try WardenDatabase(path: path)
+            .appendingPathComponent("agamemnon-alert-\(UUID().uuidString).db").path
+        let db = try AgamemnonDatabase(path: path)
         let e = UsageEvent(
             source: .kimi,
             sessionId: "s",

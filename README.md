@@ -1,16 +1,28 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/agamemnon-dark.svg">
+    <img alt="Agamemnon" src="assets/agamemnon-light.svg" width="120">
+  </picture>
+</p>
+
 # Agamemnon
 
-Native macOS menu-bar app that monitors token usage and token abuse across local AI coding CLIs: Claude Code (claude-work profile), Kimi Code CLI, and Cursor CLI.
+Native macOS menu-bar app that monitors token spend across local AI coding CLIs: **Kimi Code CLI**, **Cursor CLI (cursor-agent)**, and **Claude Code (claude-work profile)**.
+
+**Site:** [anishfyi.github.io/agamemnon](https://anishfyi.github.io/agamemnon/)
 
 ![Screenshot placeholder](docs/screenshot-placeholder.png)
 
 ## Features
 
-- Live menu-bar title with today's total tokens (e.g. `⛨ 1.2M`), warning color when alerts are active
-- Per-source today totals, 5-hour and 7-day burn, burn rate (tokens/min), active alert count
-- Admin panel: Overview charts, Sessions table, Abuse alerts, Settings
-- Incremental JSONL / SQLite parsers with a local cache at `~/Library/Application Support/Warden/warden.db`
-- Abuse rules: burn spike, daily cap, cache-miss anomaly, loop detection
+- Live menu-bar helmet icon with today's total tokens, warning color when alerts are active
+- Real-time spend dashboard: per-source cards in priority order (kimi, cursor, claude-work)
+- Input/output/cache tokens, burn rate (tokens/min over last 15 min), estimated cost, and state (ok / warning / critical)
+- 5-hour and weekly rolling window progress bars with configurable per-source limits
+- Totals strip: combined spend today, this week, all-time
+- Sessions table, abuse alerts, and configurable settings (default refresh: 5 seconds)
+- Incremental JSONL / SQLite parsers with a local cache at `~/Library/Application Support/Agamemnon/agamemnon.db`
+- Migrates data from `~/Library/Application Support/Warden/warden.db` on first run
 - No network access. No telemetry. Everything stays on disk.
 
 ## Requirements
@@ -24,26 +36,26 @@ Native macOS menu-bar app that monitors token usage and token abuse across local
 ./build.sh
 ```
 
-This produces `Warden.app` in the repo root. Debug build: `./build.sh debug`.
+This produces `Agamemnon.app` in the repo root. Debug build: `./build.sh debug`.
 
 Run tests (standalone runner; works with Xcode CLT, no XCTest required):
 
 ```bash
-swift build --product WardenTests && .build/debug/WardenTests
+swift build --product AgamemnonTests && .build/debug/AgamemnonTests
 ```
 
 ## Run
 
 ```bash
-open Warden.app
+open Agamemnon.app
 ```
 
 Unsigned personal-tool distribution. If macOS blocks the app:
 
 ```bash
-xattr -cr /Applications/Warden.app
+xattr -cr /Applications/Agamemnon.app
 # or, from the build directory:
-xattr -cr ./Warden.app
+xattr -cr ./Agamemnon.app
 ```
 
 Quit from the menu-bar dropdown, or pause monitoring without quitting.
@@ -52,17 +64,17 @@ Quit from the menu-bar dropdown, or pause monitoring without quitting.
 
 | Source | Path | Notes |
 |--------|------|-------|
-| Claude Code (work) | `~/.claude-work/projects/<slug>/<session>.jsonl` | Priority source. Counts assistant `usage` once per message id. |
+| Kimi Code CLI | `~/.kimi-code/sessions/*/session_*/agents/*/wire.jsonl` | Priority source. `inputOther` / `output` / cache fields |
+| Cursor CLI | `~/.cursor/ai-tracking/ai-code-tracking.db` plus `debug-logs/` and `chats/` | Activity always; token counts only when present locally. Otherwise the UI shows: `cursor: activity only, tokens unavailable` |
+| Claude Code (work) | `~/.claude-work/projects/<slug>/<session>.jsonl` | Counts assistant `usage` once per message id |
 | Claude Code | `~/.claude/projects` | Optional, enabled in Settings |
 | Claude Code (personal) | `~/.claude-personal/projects` | Optional |
-| Kimi Code CLI | `~/.kimi-code/sessions/*/session_*/agents/*/wire.jsonl` | `inputOther` / `output` / cache fields |
-| Cursor CLI | `~/.cursor/ai-tracking/ai-code-tracking.db` plus `debug-logs/` and `chats/` | Activity always; token counts only when present locally. Otherwise the UI shows: `cursor: activity only, tokens unavailable` |
 
-Paths and enable toggles are editable under Settings.
+Paths, enable toggles, and per-source window limits are editable under Settings.
 
 ## Privacy
 
-Everything stays on disk, nothing leaves the machine. Warden never opens network connections for telemetry or reporting.
+Everything stays on disk, nothing leaves the machine. Agamemnon never opens network connections for telemetry or reporting.
 
 ## License
 
