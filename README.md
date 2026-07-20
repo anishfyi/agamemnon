@@ -1,3 +1,7 @@
+<p align="center">
+  <img alt="Agamemnon" src="assets/agamemnon-logo.png" width="120">
+</p>
+
 # Agamemnon
 
 Native macOS menu-bar app that monitors token spend across local AI coding CLIs: **Kimi Code CLI**, **Cursor CLI (cursor-agent)**, and **Claude Code (claude-work profile)**.
