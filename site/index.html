@@ -101,14 +101,6 @@
     transform: translateY(0.8vh);
     max-width: 52rem;
   }
-  .mark {
-    width: clamp(72px, 14vw, 108px);
-    height: auto;
-    border-radius: 50%;
-    opacity: 0;
-    animation: rise 1.8s cubic-bezier(0.22, 1, 0.36, 1) 0.05s forwards;
-    filter: drop-shadow(0 0 48px rgba(201, 162, 39, 0.18));
-  }
   .eyebrow {
     font-family: var(--sans);
     font-size: 0.62rem;
@@ -271,7 +263,7 @@
     .bar.top .label { display: none; }
   }
   @media (prefers-reduced-motion: reduce) {
-    .bar, .mark, .eyebrow, h1, .rule, .tagline, .cta { animation: none; opacity: 1; }
+    .bar, .eyebrow, h1, .rule, .tagline, .cta { animation: none; opacity: 1; }
     h1 { text-shadow: none; }
     #gl { display: none; }
   }
@@ -287,7 +279,6 @@
 
 <main class="hero">
   <div class="stack">
-    <img class="mark" src="assets/agamemnon-logo.png" alt="Agamemnon spartan helmet" width="108" height="108">
     <span class="eyebrow">token spend monitor</span>
     <h1>agamem<em>n</em>on</h1>
     <span class="rule" aria-hidden="true"></span>
