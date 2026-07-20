@@ -17,7 +17,10 @@ let package = Package(
         .executableTarget(
             name: "Agamemnon",
             dependencies: ["AgamemnonCore"],
-            path: "Sources/Agamemnon"
+            path: "Sources/Agamemnon",
+            resources: [
+                .process("Resources"),
+            ]
         ),
         // Standalone test runner (works with Command Line Tools; no XCTest / full Xcode required).
         // Fixtures live under Tests/AgamemnonTests/Fixtures.

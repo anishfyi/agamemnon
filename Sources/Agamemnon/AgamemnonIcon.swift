@@ -3,83 +3,56 @@ import SwiftUI
 
 enum AgamemnonIcon {
     static func menuBarImage() -> NSImage {
-        let image = NSImage(size: NSSize(width: 18, height: 18))
-        image.addRepresentation(renderHelmet(pixels: 18))
-        image.addRepresentation(renderHelmet(pixels: 36))
-        image.isTemplate = true
+        if let image = loadImage(named: "agamemnon-logo") {
+            image.size = NSSize(width: 16, height: 16)
+            return image
+        }
+        return fallbackImage()
+    }
+
+    static func logoImage(size: CGFloat = 96) -> NSImage {
+        let image = loadImage(named: "agamemnon-logo") ?? fallbackImage()
+        image.size = NSSize(width: size, height: size)
         return image
     }
 
-    private static func renderHelmet(pixels: Int) -> NSBitmapImageRep {
-        let rep = NSBitmapImageRep(
-            bitmapDataPlanes: nil,
-            pixelsWide: pixels,
-            pixelsHigh: pixels,
-            bitsPerSample: 8,
-            samplesPerPixel: 4,
-            hasAlpha: true,
-            isPlanar: false,
-            colorSpaceName: .deviceRGB,
-            bytesPerRow: 0,
-            bitsPerPixel: 0
-        )!
-        NSGraphicsContext.saveGraphicsState()
-        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
-        let rect = NSRect(x: 0, y: 0, width: pixels, height: pixels)
-        NSColor.clear.setFill()
-        rect.fill()
-        NSColor.black.setFill()
-        helmetPath(in: rect).fill()
-        NSGraphicsContext.restoreGraphicsState()
-        return rep
+    private static func loadImage(named: String) -> NSImage? {
+        let bundles: [Bundle] = [.main, Bundle.module]
+        for bundle in bundles {
+            if let url = bundle.url(forResource: named, withExtension: "png") {
+                return NSImage(contentsOf: url)
+            }
+            if let url = bundle.url(forResource: named, withExtension: "png", subdirectory: "assets") {
+                return NSImage(contentsOf: url)
+            }
+        }
+        let candidates = [
+            URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+                .appendingPathComponent("assets/\(named).png"),
+            URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()
+                .appendingPathComponent("Resources/\(named).png"),
+        ]
+        for url in candidates where FileManager.default.fileExists(atPath: url.path) {
+            return NSImage(contentsOf: url)
+        }
+        return nil
     }
 
-    private static func helmetPath(in rect: NSRect) -> NSBezierPath {
-        let w = rect.width
-        let h = rect.height
-        let path = NSBezierPath()
-
-        // Crest
-        path.move(to: NSPoint(x: w * 0.50, y: h * 0.96))
-        path.line(to: NSPoint(x: w * 0.43, y: h * 0.76))
-        path.line(to: NSPoint(x: w * 0.57, y: h * 0.76))
-        path.close()
-
-        // Dome + cheek guards (single silhouette)
-        path.move(to: NSPoint(x: w * 0.16, y: h * 0.70))
-        path.curve(
-            to: NSPoint(x: w * 0.84, y: h * 0.70),
-            controlPoint1: NSPoint(x: w * 0.16, y: h * 0.98),
-            controlPoint2: NSPoint(x: w * 0.84, y: h * 0.98)
-        )
-        path.line(to: NSPoint(x: w * 0.98, y: h * 0.28))
-        path.line(to: NSPoint(x: w * 0.82, y: h * 0.18))
-        path.line(to: NSPoint(x: w * 0.70, y: h * 0.40))
-        path.line(to: NSPoint(x: w * 0.62, y: h * 0.52))
-        path.line(to: NSPoint(x: w * 0.38, y: h * 0.52))
-        path.line(to: NSPoint(x: w * 0.30, y: h * 0.40))
-        path.line(to: NSPoint(x: w * 0.18, y: h * 0.18))
-        path.line(to: NSPoint(x: w * 0.02, y: h * 0.28))
-        path.close()
-
-        // Face opening cutout
-        let face = NSBezierPath()
-        face.move(to: NSPoint(x: w * 0.36, y: h * 0.52))
-        face.line(to: NSPoint(x: w * 0.64, y: h * 0.52))
-        face.line(to: NSPoint(x: w * 0.56, y: h * 0.22))
-        face.line(to: NSPoint(x: w * 0.44, y: h * 0.22))
-        face.close()
-        path.append(face)
-        path.windingRule = .evenOdd
-
-        return path
+    private static func fallbackImage() -> NSImage {
+        let image = NSImage(size: NSSize(width: 16, height: 16))
+        image.lockFocus()
+        NSColor.labelColor.setFill()
+        NSBezierPath(ovalIn: NSRect(x: 2, y: 2, width: 12, height: 12)).fill()
+        image.unlockFocus()
+        image.isTemplate = true
+        return image
     }
 }
 
 struct MenuBarIconView: View {
     var body: some View {
         Image(nsImage: AgamemnonIcon.menuBarImage())
-            .renderingMode(.template)
     }
 }
 
