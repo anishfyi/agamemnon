@@ -1,5 +1,5 @@
 <p align="center">
-  <img alt="Agamemnon" src="assets/agamemnon-logo.png" width="120">
+  <img alt="AgamemnonConsole" src="assets/agamemnon-logo.png" width="120">
 </p>
 
 # Agamemnon
