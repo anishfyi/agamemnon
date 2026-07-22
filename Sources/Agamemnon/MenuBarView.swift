@@ -6,16 +6,17 @@ struct MenuBarLabel: View {
     @EnvironmentObject var appState: AppState
 
     var body: some View {
-        let total = appState.snapshot.todayTotal.totalTokens
-        let warning = appState.snapshot.activeAlerts > 0
+        let snap = appState.snapshot
+        let blocked = snap.sourceStats.contains { $0.activeLimitHit != nil }
+        let warning = snap.activeAlerts > 0 || snap.sourceStats.contains { $0.state != .ok }
         Label {
-            Text(TokenFormat.compact(total))
+            Text(TokenFormat.currency(snap.todayCost))
                 .monospacedDigit()
         } icon: {
             MenuBarIconView()
         }
         .labelStyle(.titleAndIcon)
-        .foregroundStyle(warning ? Color.orange : Color.primary)
+        .foregroundStyle(blocked ? Color.red : (warning ? Color.orange : Color.primary))
     }
 }
 
@@ -27,25 +28,27 @@ struct MenuBarView: View {
         let snap = appState.snapshot
         let settings = appState.settings
 
-        Text("Today: \(TokenFormat.compact(snap.todayTotal.totalTokens))")
+        Text("Today: \(TokenFormat.compact(snap.todayTotal.totalTokens)) tok · \(TokenFormat.currency(snap.todayCost))")
         Divider()
 
-        ForEach(DashboardSource.allCases) { dashSource in
-            if settings.toggles.isEnabled(dashSource.tokenSource) {
-                let u = snap.todayBySource[dashSource.tokenSource] ?? .zero
-                Text("\(dashSource.shortName): \(TokenFormat.compact(u.totalTokens))")
+        ForEach(snap.sourceStats) { stats in
+            Text(menuLine(for: stats))
+        }
+
+        Divider()
+
+        // Only the tightest window is worth surfacing here; the full picture lives in
+        // the dashboard.
+        if let tightest = snap.sourceStats.filter({ $0.session.limit > 0 }).max(by: { $0.session.ratio < $1.session.ratio }) {
+            Text("\(tightest.source.shortName) session: \(Int(tightest.session.ratio * 100))% used")
+                .foregroundStyle(tightest.session.ratio >= 0.9 ? .red : .primary)
+            if let reset = tightest.session.reset {
+                Text("Resets \(reset, format: .dateTime.hour().minute())")
+                    .foregroundStyle(.secondary)
             }
         }
 
-        if !snap.cursorNote.isEmpty {
-            Text(snap.cursorNote)
-                .foregroundStyle(.secondary)
-        }
-
-        Divider()
-        Text("5h burn: \(TokenFormat.compact(snap.fiveHour.totalTokens))")
-        Text("7d burn: \(TokenFormat.compact(snap.sevenDay.totalTokens))")
-        Text("Rate: \(String(format: "%.0f", snap.burnPerMinute)) tok/min")
+        Text("Burn: \(TokenFormat.compact(Int(snap.burnPerMinute)))/min billable")
         Text("Alerts: \(snap.activeAlerts)")
             .foregroundStyle(snap.activeAlerts > 0 ? .orange : .primary)
 
@@ -61,5 +64,15 @@ struct MenuBarView: View {
         Button("Quit Agamemnon") {
             NSApp.terminate(nil)
         }
+    }
+
+    private func menuLine(for stats: SourceSpendStats) -> String {
+        if stats.activeLimitHit != nil {
+            return "\(stats.source.shortName): limit reached"
+        }
+        if stats.tokensUnavailable {
+            return "\(stats.source.shortName): activity only"
+        }
+        return "\(stats.source.shortName): \(TokenFormat.compact(stats.today.totalTokens)) · \(TokenFormat.currency(stats.todayCost))"
     }
 }

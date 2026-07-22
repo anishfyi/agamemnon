@@ -88,8 +88,78 @@ public final class AgamemnonDatabase: @unchecked Sendable {
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS limit_hits (
+            id TEXT PRIMARY KEY,
+            kind TEXT NOT NULL,
+            source TEXT NOT NULL,
+            hit_at REAL NOT NULL,
+            reset_at REAL,
+            model TEXT NOT NULL DEFAULT '',
+            raw_text TEXT NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_limits_reset ON limit_hits(reset_at);
+        CREATE INDEX IF NOT EXISTS idx_limits_kind ON limit_hits(kind, source);
         """
         try exec(sql)
+        addColumnIfMissing(table: "usage_events", column: "cache_write_1h", definition: "INTEGER NOT NULL DEFAULT 0")
+        repairLegacyRowsIfNeeded()
+    }
+
+    /// One-time cleanup of rows the previous version wrote incorrectly.
+    ///
+    /// Two defects poisoned the stored history: Kimi events were stamped with the poll
+    /// time rather than the record's own `time` field, so every one of them landed in
+    /// whatever window happened to be current; and Cursor activity was written as
+    /// zero-token usage rows, which inflated session and message counts with entries
+    /// that represent no usage at all. Both are discarded and, for Kimi, re-ingested
+    /// from source by clearing its file offsets.
+    private func repairLegacyRowsIfNeeded() {
+        let key = "repair.v2.kimi-timestamps-and-cursor-rows"
+        var check: OpaquePointer?
+        var alreadyDone = false
+        if sqlite3_prepare_v2(db, "SELECT value FROM meta WHERE key = ?", -1, &check, nil) == SQLITE_OK {
+            sqlite3_bind_text(check, 1, key, -1, SQLITE_TRANSIENT)
+            alreadyDone = sqlite3_step(check) == SQLITE_ROW
+        }
+        sqlite3_finalize(check)
+        guard !alreadyDone else { return }
+
+        try? exec("""
+        DELETE FROM usage_events WHERE source = 'kimi';
+        DELETE FROM file_offsets WHERE path LIKE '%wire.jsonl';
+        DELETE FROM usage_events
+            WHERE source = 'cursor'
+              AND input_tokens = 0 AND output_tokens = 0
+              AND cache_creation = 0 AND cache_read = 0;
+        """)
+
+        var mark: OpaquePointer?
+        defer { sqlite3_finalize(mark) }
+        if sqlite3_prepare_v2(db, "INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)", -1, &mark, nil) == SQLITE_OK {
+            sqlite3_bind_text(mark, 1, key, -1, SQLITE_TRANSIENT)
+            sqlite3_bind_text(mark, 2, ISO8601DateFormatter().string(from: Date()), -1, SQLITE_TRANSIENT)
+            sqlite3_step(mark)
+        }
+    }
+
+    /// SQLite has no `ADD COLUMN IF NOT EXISTS`, so probe the schema first. A failed
+    /// add on an existing column is harmless but noisy, and swallowing every error here
+    /// would hide a genuinely broken migration.
+    private func addColumnIfMissing(table: String, column: String, definition: String) {
+        var stmt: OpaquePointer?
+        defer { sqlite3_finalize(stmt) }
+        guard sqlite3_prepare_v2(db, "PRAGMA table_info(\(table))", -1, &stmt, nil) == SQLITE_OK else { return }
+        var found = false
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            if let name = sqlite3_column_text(stmt, 1), String(cString: name) == column {
+                found = true
+                break
+            }
+        }
+        if !found {
+            try? exec("ALTER TABLE \(table) ADD COLUMN \(column) \(definition)")
+        }
     }
 
     public enum DBError: Error, CustomStringConvertible {
@@ -175,8 +245,8 @@ public final class AgamemnonDatabase: @unchecked Sendable {
             defer { sqlite3_finalize(stmt) }
             let sql = """
             INSERT OR IGNORE INTO usage_events
-            (id, source, session_id, project, model, timestamp, input_tokens, output_tokens, cache_creation, cache_read, message_id)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            (id, source, session_id, project, model, timestamp, input_tokens, output_tokens, cache_creation, cache_read, message_id, cache_write_1h)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
             """
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return false }
             bindEvent(stmt, event)
@@ -208,6 +278,7 @@ public final class AgamemnonDatabase: @unchecked Sendable {
         } else {
             sqlite3_bind_null(stmt, 11)
         }
+        sqlite3_bind_int64(stmt, 12, Int64(event.usage.cacheWrite1hTokens))
     }
 
     public func events(from: Date? = nil, to: Date? = nil, source: TokenSource? = nil, limit: Int = 10_000) -> [UsageEvent] {
@@ -217,7 +288,7 @@ public final class AgamemnonDatabase: @unchecked Sendable {
             if to != nil { clauses.append("timestamp < ?") }
             if source != nil { clauses.append("source = ?") }
             let whereSQL = clauses.isEmpty ? "" : "WHERE " + clauses.joined(separator: " AND ")
-            let sql = "SELECT id, source, session_id, project, model, timestamp, input_tokens, output_tokens, cache_creation, cache_read, message_id FROM usage_events \(whereSQL) ORDER BY timestamp DESC LIMIT ?"
+            let sql = "SELECT id, source, session_id, project, model, timestamp, input_tokens, output_tokens, cache_creation, cache_read, message_id, cache_write_1h FROM usage_events \(whereSQL) ORDER BY timestamp DESC LIMIT ?"
             var stmt: OpaquePointer?
             defer { sqlite3_finalize(stmt) }
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
@@ -256,7 +327,8 @@ public final class AgamemnonDatabase: @unchecked Sendable {
                     inputTokens: Int(sqlite3_column_int64(stmt, 6)),
                     outputTokens: Int(sqlite3_column_int64(stmt, 7)),
                     cacheCreationTokens: Int(sqlite3_column_int64(stmt, 8)),
-                    cacheReadTokens: Int(sqlite3_column_int64(stmt, 9))
+                    cacheReadTokens: Int(sqlite3_column_int64(stmt, 9)),
+                    cacheWrite1hTokens: Int(sqlite3_column_int64(stmt, 11))
                 ),
                 messageId: mid
             ))
@@ -273,7 +345,8 @@ public final class AgamemnonDatabase: @unchecked Sendable {
             let whereSQL = clauses.isEmpty ? "" : "WHERE " + clauses.joined(separator: " AND ")
             let sql = """
             SELECT COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0),
-                   COALESCE(SUM(cache_creation),0), COALESCE(SUM(cache_read),0)
+                   COALESCE(SUM(cache_creation),0), COALESCE(SUM(cache_read),0),
+                   COALESCE(SUM(cache_write_1h),0)
             FROM usage_events \(whereSQL)
             """
             var stmt: OpaquePointer?
@@ -297,8 +370,158 @@ public final class AgamemnonDatabase: @unchecked Sendable {
                 inputTokens: Int(sqlite3_column_int64(stmt, 0)),
                 outputTokens: Int(sqlite3_column_int64(stmt, 1)),
                 cacheCreationTokens: Int(sqlite3_column_int64(stmt, 2)),
-                cacheReadTokens: Int(sqlite3_column_int64(stmt, 3))
+                cacheReadTokens: Int(sqlite3_column_int64(stmt, 3)),
+                cacheWrite1hTokens: Int(sqlite3_column_int64(stmt, 4))
             )
+        }
+    }
+
+    /// Usage broken out per model. Cost and billable-token weighting both depend on
+    /// which model produced the tokens, so every aggregate the dashboard shows has to
+    /// start here rather than from a single undifferentiated total.
+    public func usageByModel(from: Date? = nil, to: Date? = nil, source: TokenSource? = nil) -> [String: TokenUsage] {
+        withLock {
+            var clauses: [String] = []
+            if from != nil { clauses.append("timestamp >= ?") }
+            if to != nil { clauses.append("timestamp < ?") }
+            if source != nil { clauses.append("source = ?") }
+            let whereSQL = clauses.isEmpty ? "" : "WHERE " + clauses.joined(separator: " AND ")
+            let sql = """
+            SELECT model,
+                   COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0),
+                   COALESCE(SUM(cache_creation),0), COALESCE(SUM(cache_read),0),
+                   COALESCE(SUM(cache_write_1h),0)
+            FROM usage_events \(whereSQL) GROUP BY model
+            """
+            var stmt: OpaquePointer?
+            defer { sqlite3_finalize(stmt) }
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [:] }
+            var idx: Int32 = 1
+            if let from {
+                sqlite3_bind_double(stmt, idx, from.timeIntervalSince1970)
+                idx += 1
+            }
+            if let to {
+                sqlite3_bind_double(stmt, idx, to.timeIntervalSince1970)
+                idx += 1
+            }
+            if let source {
+                sqlite3_bind_text(stmt, idx, source.rawValue, -1, SQLITE_TRANSIENT)
+                idx += 1
+            }
+            var out: [String: TokenUsage] = [:]
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                let model = sqlite3_column_text(stmt, 0).map { String(cString: $0) } ?? ""
+                out[model, default: .zero] = out[model, default: .zero] + TokenUsage(
+                    inputTokens: Int(sqlite3_column_int64(stmt, 1)),
+                    outputTokens: Int(sqlite3_column_int64(stmt, 2)),
+                    cacheCreationTokens: Int(sqlite3_column_int64(stmt, 3)),
+                    cacheReadTokens: Int(sqlite3_column_int64(stmt, 4)),
+                    cacheWrite1hTokens: Int(sqlite3_column_int64(stmt, 5))
+                )
+            }
+            return out
+        }
+    }
+
+    // MARK: - Meta flags
+
+    /// One-shot markers for migrations and backfills that must not repeat on restart.
+    public func metaFlag(_ key: String) -> Bool {
+        withLock {
+            var stmt: OpaquePointer?
+            defer { sqlite3_finalize(stmt) }
+            guard sqlite3_prepare_v2(db, "SELECT 1 FROM meta WHERE key = ?", -1, &stmt, nil) == SQLITE_OK else {
+                return false
+            }
+            sqlite3_bind_text(stmt, 1, key, -1, SQLITE_TRANSIENT)
+            return sqlite3_step(stmt) == SQLITE_ROW
+        }
+    }
+
+    public func setMetaFlag(_ key: String) {
+        withLock {
+            var stmt: OpaquePointer?
+            defer { sqlite3_finalize(stmt) }
+            guard sqlite3_prepare_v2(db, "INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)", -1, &stmt, nil) == SQLITE_OK else { return }
+            sqlite3_bind_text(stmt, 1, key, -1, SQLITE_TRANSIENT)
+            sqlite3_bind_text(stmt, 2, ISO8601DateFormatter().string(from: Date()), -1, SQLITE_TRANSIENT)
+            sqlite3_step(stmt)
+        }
+    }
+
+    // MARK: - Limit hits
+
+    public func insertLimitHits(_ hits: [LimitHit]) -> Int {
+        withLock {
+            var inserted = 0
+            for hit in hits {
+                var stmt: OpaquePointer?
+                let sql = """
+                INSERT OR IGNORE INTO limit_hits (id, kind, source, hit_at, reset_at, model, raw_text)
+                VALUES (?,?,?,?,?,?,?)
+                """
+                guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { continue }
+                sqlite3_bind_text(stmt, 1, hit.id, -1, SQLITE_TRANSIENT)
+                sqlite3_bind_text(stmt, 2, hit.kind.rawValue, -1, SQLITE_TRANSIENT)
+                sqlite3_bind_text(stmt, 3, hit.source.rawValue, -1, SQLITE_TRANSIENT)
+                sqlite3_bind_double(stmt, 4, hit.hitAt.timeIntervalSince1970)
+                if let reset = hit.resetAt {
+                    sqlite3_bind_double(stmt, 5, reset.timeIntervalSince1970)
+                } else {
+                    sqlite3_bind_null(stmt, 5)
+                }
+                sqlite3_bind_text(stmt, 6, hit.model, -1, SQLITE_TRANSIENT)
+                sqlite3_bind_text(stmt, 7, hit.rawText, -1, SQLITE_TRANSIENT)
+                if sqlite3_step(stmt) == SQLITE_DONE, sqlite3_changes(db) > 0 {
+                    inserted += 1
+                }
+                sqlite3_finalize(stmt)
+            }
+            return inserted
+        }
+    }
+
+    public func limitHits(source: TokenSource? = nil, since: Date? = nil, limit: Int = 500) -> [LimitHit] {
+        withLock {
+            var clauses: [String] = []
+            if source != nil { clauses.append("source = ?") }
+            if since != nil { clauses.append("hit_at >= ?") }
+            let whereSQL = clauses.isEmpty ? "" : "WHERE " + clauses.joined(separator: " AND ")
+            let sql = "SELECT id, kind, source, hit_at, reset_at, model, raw_text FROM limit_hits \(whereSQL) ORDER BY hit_at DESC LIMIT ?"
+            var stmt: OpaquePointer?
+            defer { sqlite3_finalize(stmt) }
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+            var idx: Int32 = 1
+            if let source {
+                sqlite3_bind_text(stmt, idx, source.rawValue, -1, SQLITE_TRANSIENT)
+                idx += 1
+            }
+            if let since {
+                sqlite3_bind_double(stmt, idx, since.timeIntervalSince1970)
+                idx += 1
+            }
+            sqlite3_bind_int(stmt, idx, Int32(limit))
+            var out: [LimitHit] = []
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                guard let kindRaw = sqlite3_column_text(stmt, 1),
+                      let kind = LimitHit.Kind(rawValue: String(cString: kindRaw)),
+                      let sourceRaw = sqlite3_column_text(stmt, 2),
+                      let src = TokenSource(rawValue: String(cString: sourceRaw)) else { continue }
+                let reset: Date? = sqlite3_column_type(stmt, 4) == SQLITE_NULL
+                    ? nil
+                    : Date(timeIntervalSince1970: sqlite3_column_double(stmt, 4))
+                out.append(LimitHit(
+                    id: String(cString: sqlite3_column_text(stmt, 0)),
+                    kind: kind,
+                    source: src,
+                    hitAt: Date(timeIntervalSince1970: sqlite3_column_double(stmt, 3)),
+                    resetAt: reset,
+                    model: sqlite3_column_text(stmt, 5).map { String(cString: $0) } ?? "",
+                    rawText: sqlite3_column_text(stmt, 6).map { String(cString: $0) } ?? ""
+                ))
+            }
+            return out
         }
     }
 
@@ -316,6 +539,26 @@ public final class AgamemnonDatabase: @unchecked Sendable {
             sqlite3_bind_text(stmt, 3, source.rawValue, -1, SQLITE_TRANSIENT)
             guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
             if sqlite3_column_type(stmt, 0) == SQLITE_NULL { return nil }
+            return Date(timeIntervalSince1970: sqlite3_column_double(stmt, 0))
+        }
+    }
+
+    /// Timestamp of the first event at or after `date`. Used to walk forward through
+    /// fixed usage blocks: a Claude session window starts at the first message after the
+    /// previous block expired, not at "now minus five hours".
+    public func firstEventTimestamp(atOrAfter date: Date, source: TokenSource? = nil) -> Date? {
+        withLock {
+            var sql = "SELECT MIN(timestamp) FROM usage_events WHERE timestamp >= ?"
+            if source != nil { sql += " AND source = ?" }
+            var stmt: OpaquePointer?
+            defer { sqlite3_finalize(stmt) }
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
+            sqlite3_bind_double(stmt, 1, date.timeIntervalSince1970)
+            if let source {
+                sqlite3_bind_text(stmt, 2, source.rawValue, -1, SQLITE_TRANSIENT)
+            }
+            guard sqlite3_step(stmt) == SQLITE_ROW,
+                  sqlite3_column_type(stmt, 0) != SQLITE_NULL else { return nil }
             return Date(timeIntervalSince1970: sqlite3_column_double(stmt, 0))
         }
     }
@@ -365,7 +608,7 @@ public final class AgamemnonDatabase: @unchecked Sendable {
             SELECT session_id, source, project,
                    MIN(timestamp), MAX(timestamp),
                    SUM(input_tokens), SUM(output_tokens), SUM(cache_creation), SUM(cache_read),
-                   COUNT(*), MAX(model)
+                   COUNT(*), MAX(model), COALESCE(SUM(cache_write_1h),0)
             FROM usage_events
             GROUP BY session_id, source
             ORDER BY MAX(timestamp) DESC
@@ -389,7 +632,8 @@ public final class AgamemnonDatabase: @unchecked Sendable {
                         inputTokens: Int(sqlite3_column_int64(stmt, 5)),
                         outputTokens: Int(sqlite3_column_int64(stmt, 6)),
                         cacheCreationTokens: Int(sqlite3_column_int64(stmt, 7)),
-                        cacheReadTokens: Int(sqlite3_column_int64(stmt, 8))
+                        cacheReadTokens: Int(sqlite3_column_int64(stmt, 8)),
+                        cacheWrite1hTokens: Int(sqlite3_column_int64(stmt, 11))
                     ),
                     messageCount: Int(sqlite3_column_int64(stmt, 9)),
                     model: String(cString: sqlite3_column_text(stmt, 10))
@@ -402,7 +646,7 @@ public final class AgamemnonDatabase: @unchecked Sendable {
     public func sessionEvents(sessionId: String) -> [UsageEvent] {
         withLock {
             let sql = """
-            SELECT id, source, session_id, project, model, timestamp, input_tokens, output_tokens, cache_creation, cache_read, message_id
+            SELECT id, source, session_id, project, model, timestamp, input_tokens, output_tokens, cache_creation, cache_read, message_id, cache_write_1h
             FROM usage_events WHERE session_id = ? ORDER BY timestamp ASC
             """
             var stmt: OpaquePointer?
