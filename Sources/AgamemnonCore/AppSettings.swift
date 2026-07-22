@@ -1,45 +1,44 @@
 import Foundation
 
+/// Per-source window limits, expressed in input-token-equivalents.
+///
+/// Zero means "not set by the user". The engine then falls back to a limit measured
+/// from an observed limit hit, and only then to a plan-derived estimate. The previous
+/// version hardcoded invented numbers here and presented them as if they were real,
+/// which is what made the dashboard read `1.3B / 30.0M`.
 public struct SourceWindowLimits: Codable, Sendable, Equatable {
-    public var fiveHourTokens: Int
-    public var weeklyTokens: Int
+    public var sessionBillable: Double
+    public var weeklyBillable: Double
 
-    public init(fiveHourTokens: Int = 5_000_000, weeklyTokens: Int = 25_000_000) {
-        self.fiveHourTokens = fiveHourTokens
-        self.weeklyTokens = weeklyTokens
+    public init(sessionBillable: Double = 0, weeklyBillable: Double = 0) {
+        self.sessionBillable = sessionBillable
+        self.weeklyBillable = weeklyBillable
     }
+
+    public var isUnset: Bool { sessionBillable <= 0 && weeklyBillable <= 0 }
+
+    public static let unset = SourceWindowLimits()
 }
 
 public struct PerSourceLimits: Codable, Sendable, Equatable {
-    public var kimi: SourceWindowLimits
-    public var cursor: SourceWindowLimits
-    public var claudeWork: SourceWindowLimits
+    /// Keyed by `DashboardSource.rawValue` so new sources need no schema change.
+    public var overrides: [String: SourceWindowLimits]
 
-    public init(
-        kimi: SourceWindowLimits = SourceWindowLimits(fiveHourTokens: 3_000_000, weeklyTokens: 15_000_000),
-        cursor: SourceWindowLimits = SourceWindowLimits(fiveHourTokens: 5_000_000, weeklyTokens: 25_000_000),
-        claudeWork: SourceWindowLimits = SourceWindowLimits(fiveHourTokens: 5_000_000, weeklyTokens: 30_000_000)
-    ) {
-        self.kimi = kimi
-        self.cursor = cursor
-        self.claudeWork = claudeWork
+    public init(overrides: [String: SourceWindowLimits] = [:]) {
+        self.overrides = overrides
     }
 
     public static let `default` = PerSourceLimits()
 
     public func limits(for source: DashboardSource) -> SourceWindowLimits {
-        switch source {
-        case .kimi: return kimi
-        case .cursor: return cursor
-        case .claudeWork: return claudeWork
-        }
+        overrides[source.rawValue] ?? .unset
     }
 
     public mutating func setLimits(_ limits: SourceWindowLimits, for source: DashboardSource) {
-        switch source {
-        case .kimi: kimi = limits
-        case .cursor: cursor = limits
-        case .claudeWork: claudeWork = limits
+        if limits.isUnset {
+            overrides.removeValue(forKey: source.rawValue)
+        } else {
+            overrides[source.rawValue] = limits
         }
     }
 }
@@ -72,65 +71,88 @@ public struct AlertThresholds: Codable, Sendable, Equatable {
 }
 
 public struct SourcePaths: Codable, Sendable, Equatable {
-    public var claudeWorkProjects: String
-    public var claudeProjects: String
-    public var claudePersonalProjects: String
-    public var kimiSessions: String
-    public var cursorTrackingDB: String
-    public var cursorDebugLogs: String
-    public var cursorChats: String
+    /// Keyed by `TokenSource.rawValue`. A dictionary rather than one stored property
+    /// per CLI, so adding a source does not break decoding of an existing settings file.
+    public var roots: [String: String]
 
-    public init(
-        claudeWorkProjects: String? = nil,
-        claudeProjects: String? = nil,
-        claudePersonalProjects: String? = nil,
-        kimiSessions: String? = nil,
-        cursorTrackingDB: String? = nil,
-        cursorDebugLogs: String? = nil,
-        cursorChats: String? = nil
-    ) {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        self.claudeWorkProjects = claudeWorkProjects ?? "\(home)/.claude-work/projects"
-        self.claudeProjects = claudeProjects ?? "\(home)/.claude/projects"
-        self.claudePersonalProjects = claudePersonalProjects ?? "\(home)/.claude-personal/projects"
-        self.kimiSessions = kimiSessions ?? "\(home)/.kimi-code/sessions"
-        self.cursorTrackingDB = cursorTrackingDB ?? "\(home)/.cursor/ai-tracking/ai-code-tracking.db"
-        self.cursorDebugLogs = cursorDebugLogs ?? "\(home)/.cursor/debug-logs"
-        self.cursorChats = cursorChats ?? "\(home)/.cursor/chats"
+    public init(roots: [String: String] = [:]) {
+        var merged = SourcePaths.defaultRoots
+        for (k, v) in roots where !v.isEmpty { merged[k] = v }
+        self.roots = merged
     }
+
+    public static var defaultRoots: [String: String] {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        return [
+            TokenSource.claudeWork.rawValue: "\(home)/.claude-work/projects",
+            TokenSource.claude.rawValue: "\(home)/.claude/projects",
+            TokenSource.claudePersonal.rawValue: "\(home)/.claude-personal/projects",
+            TokenSource.kimi.rawValue: "\(home)/.kimi-code/sessions",
+            TokenSource.cursor.rawValue: "\(home)/.cursor/ai-tracking/ai-code-tracking.db",
+            TokenSource.codex.rawValue: "\(home)/.codex/sessions",
+            TokenSource.gemini.rawValue: "\(home)/.gemini/tmp",
+            TokenSource.opencode.rawValue: "\(home)/.local/share/opencode/opencode.db",
+            TokenSource.crush.rawValue: "\(home)/.crush/crush.db",
+            TokenSource.copilot.rawValue: "\(home)/.copilot/session-state",
+        ]
+    }
+
+    public func root(for source: TokenSource) -> String {
+        roots[source.rawValue] ?? SourcePaths.defaultRoots[source.rawValue] ?? ""
+    }
+
+    public mutating func setRoot(_ path: String, for source: TokenSource) {
+        roots[source.rawValue] = path
+    }
+
+    /// Whether this CLI has actually been used on this machine.
+    public func exists(_ source: TokenSource) -> Bool {
+        let path = root(for: source)
+        return !path.isEmpty && FileManager.default.fileExists(atPath: path)
+    }
+
+    // Convenience accessors kept for call sites and tests that read a specific source.
+    public var claudeWorkProjects: String { root(for: .claudeWork) }
+    public var claudeProjects: String { root(for: .claude) }
+    public var claudePersonalProjects: String { root(for: .claudePersonal) }
+    public var kimiSessions: String { root(for: .kimi) }
+    public var cursorTrackingDB: String { root(for: .cursor) }
 
     public static let `default` = SourcePaths()
 }
 
 public struct SourceToggles: Codable, Sendable, Equatable {
-    public var claudeWork: Bool
-    public var claude: Bool
-    public var claudePersonal: Bool
-    public var kimi: Bool
-    public var cursor: Bool
+    /// Explicit user choices. A source absent from this map follows auto-detection.
+    public var explicit: [String: Bool]
+    /// When on, any CLI whose data directory exists is monitored without being
+    /// enumerated here first.
+    public var autoDetect: Bool
 
-    public init(
-        claudeWork: Bool = true,
-        claude: Bool = false,
-        claudePersonal: Bool = false,
-        kimi: Bool = true,
-        cursor: Bool = true
-    ) {
-        self.claudeWork = claudeWork
-        self.claude = claude
-        self.claudePersonal = claudePersonal
-        self.kimi = kimi
-        self.cursor = cursor
+    public init(explicit: [String: Bool] = [:], autoDetect: Bool = true) {
+        self.explicit = explicit
+        self.autoDetect = autoDetect
     }
 
-    public func isEnabled(_ source: TokenSource) -> Bool {
-        switch source {
-        case .claudeWork: return claudeWork
-        case .claude: return claude
-        case .claudePersonal: return claudePersonal
-        case .kimi: return kimi
-        case .cursor: return cursor
-        }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        explicit = try c.decodeIfPresent([String: Bool].self, forKey: .explicit) ?? [:]
+        autoDetect = try c.decodeIfPresent(Bool.self, forKey: .autoDetect) ?? true
+    }
+
+    private enum CodingKeys: String, CodingKey { case explicit, autoDetect }
+
+    public func isEnabled(_ source: TokenSource, paths: SourcePaths) -> Bool {
+        if let choice = explicit[source.rawValue] { return choice }
+        guard autoDetect else { return false }
+        return paths.exists(source)
+    }
+
+    public mutating func set(_ enabled: Bool, for source: TokenSource) {
+        explicit[source.rawValue] = enabled
+    }
+
+    public mutating func clearOverride(for source: TokenSource) {
+        explicit.removeValue(forKey: source.rawValue)
     }
 
     public static let `default` = SourceToggles()
@@ -145,6 +167,9 @@ public struct AppSettings: Codable, Sendable, Equatable {
     public var pollIntervalSeconds: Int
     public var launchAtLogin: Bool
     public var paused: Bool
+    /// Manual plan selection per source, keyed by `TokenSource.rawValue`. Empty by
+    /// default: the plan is read out of the CLI's own config instead of guessed.
+    public var planOverrides: [String: PlanTier]
 
     public init(
         paths: SourcePaths = .default,
@@ -154,7 +179,8 @@ public struct AppSettings: Codable, Sendable, Equatable {
         sourceLimits: PerSourceLimits = .default,
         pollIntervalSeconds: Int = 5,
         launchAtLogin: Bool = false,
-        paused: Bool = false
+        paused: Bool = false,
+        planOverrides: [String: PlanTier] = [:]
     ) {
         self.paths = paths
         self.toggles = toggles
@@ -164,34 +190,31 @@ public struct AppSettings: Codable, Sendable, Equatable {
         self.pollIntervalSeconds = pollIntervalSeconds
         self.launchAtLogin = launchAtLogin
         self.paused = paused
+        self.planOverrides = planOverrides
     }
 
-    public static let defaultPricing: [ModelPricing] = [
-        ModelPricing(model: "claude-opus", inputPerMillion: 15.0, outputPerMillion: 75.0),
-        ModelPricing(model: "claude-sonnet", inputPerMillion: 3.0, outputPerMillion: 15.0),
-        ModelPricing(model: "claude-haiku", inputPerMillion: 0.80, outputPerMillion: 4.0),
-        ModelPricing(model: "kimi", inputPerMillion: 0.60, outputPerMillion: 2.50),
-        ModelPricing(model: "gpt-4o", inputPerMillion: 2.50, outputPerMillion: 10.0),
-        ModelPricing(model: "gpt-4.1", inputPerMillion: 2.0, outputPerMillion: 8.0),
-        ModelPricing(model: "default", inputPerMillion: 3.0, outputPerMillion: 15.0),
-    ]
+    public static let defaultPricing: [ModelPricing] = DefaultPricing.table
 
     public static let `default` = AppSettings()
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        paths = try c.decode(SourcePaths.self, forKey: .paths)
-        toggles = try c.decode(SourceToggles.self, forKey: .toggles)
+        // Every field is optional on read: an older settings file, or one written by a
+        // build that predates a field, must still load rather than resetting to defaults.
+        paths = try c.decodeIfPresent(SourcePaths.self, forKey: .paths) ?? .default
+        toggles = try c.decodeIfPresent(SourceToggles.self, forKey: .toggles) ?? .default
         pricing = try c.decodeIfPresent([ModelPricing].self, forKey: .pricing) ?? AppSettings.defaultPricing
         thresholds = try c.decodeIfPresent(AlertThresholds.self, forKey: .thresholds) ?? .default
         sourceLimits = try c.decodeIfPresent(PerSourceLimits.self, forKey: .sourceLimits) ?? .default
         pollIntervalSeconds = try c.decodeIfPresent(Int.self, forKey: .pollIntervalSeconds) ?? 5
         launchAtLogin = try c.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? false
         paused = try c.decodeIfPresent(Bool.self, forKey: .paused) ?? false
+        planOverrides = try c.decodeIfPresent([String: PlanTier].self, forKey: .planOverrides) ?? [:]
     }
 
     private enum CodingKeys: String, CodingKey {
-        case paths, toggles, pricing, thresholds, sourceLimits, pollIntervalSeconds, launchAtLogin, paused
+        case paths, toggles, pricing, thresholds, sourceLimits, pollIntervalSeconds
+        case launchAtLogin, paused, planOverrides
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -204,19 +227,29 @@ public struct AppSettings: Codable, Sendable, Equatable {
         try c.encode(pollIntervalSeconds, forKey: .pollIntervalSeconds)
         try c.encode(launchAtLogin, forKey: .launchAtLogin)
         try c.encode(paused, forKey: .paused)
+        try c.encode(planOverrides, forKey: .planOverrides)
     }
 
+    /// Longest-substring match, so `claude-opus-4-8` beats the `claude-opus` family row
+    /// regardless of the order the entries sit in.
     public func price(for model: String) -> ModelPricing {
-        let lower = model.lowercased()
-        if let exact = pricing.first(where: { lower.contains($0.model.lowercased()) && $0.model != "default" }) {
-            return exact
-        }
-        return pricing.first(where: { $0.model == "default" })
-            ?? ModelPricing(model: "default", inputPerMillion: 3.0, outputPerMillion: 15.0)
+        DefaultPricing.match(model, in: pricing)
     }
 
     public func estimateCost(usage: TokenUsage, model: String = "default") -> Double {
         price(for: model).estimateCost(usage: usage)
+    }
+
+    /// Cost of a per-model breakdown. Aggregating first and pricing once, as the old
+    /// code did, charges an Opus rate for Haiku tokens or the reverse.
+    public func estimateCost(byModel: [String: TokenUsage]) -> Double {
+        byModel.reduce(0) { $0 + price(for: $1.key).estimateCost(usage: $1.value) }
+    }
+
+    /// Input-token-equivalents for a per-model breakdown. This is what the window bars
+    /// track, because a raw token total is ~95% cache reads and says nothing about quota.
+    public func billableTokens(byModel: [String: TokenUsage]) -> Double {
+        byModel.reduce(0) { $0 + price(for: $1.key).billableTokens(usage: $1.value) }
     }
 
     public var pricingJSON: String {

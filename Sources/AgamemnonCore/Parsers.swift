@@ -124,6 +124,14 @@ public enum ClaudeParser {
         let cacheRead = JSONLReader.intValue(usage, "cache_read_input_tokens")
         if input == 0 && output == 0 && cacheCreate == 0 && cacheRead == 0 { return nil }
 
+        // The nested `cache_creation` object splits the write between the two cache
+        // TTLs, which bill at 2x (1h) and 1.25x (5m). Without the split every write
+        // would be treated as the cheaper kind.
+        var cacheWrite1h = 0
+        if let breakdown = usage["cache_creation"] as? [String: Any] {
+            cacheWrite1h = JSONLReader.intValue(breakdown, "ephemeral_1h_input_tokens")
+        }
+
         let id = messageId.map { "\(source.rawValue)-\($0)" } ?? UUID().uuidString
         return UsageEvent(
             id: id,
@@ -136,24 +144,43 @@ public enum ClaudeParser {
                 inputTokens: input,
                 outputTokens: output,
                 cacheCreationTokens: cacheCreate,
-                cacheReadTokens: cacheRead
+                cacheReadTokens: cacheRead,
+                cacheWrite1hTokens: cacheWrite1h
             ),
             messageId: messageId
         )
+    }
+
+    public struct FileScan: Sendable {
+        public var events: [UsageEvent]
+        public var limits: [LimitHit]
+        public var newOffset: Int64
+        public var size: Int64
+        public var mtime: Date
     }
 
     public static func parseFile(
         path: String,
         source: TokenSource,
         offset: Int64 = 0
-    ) -> (events: [UsageEvent], newOffset: Int64, size: Int64, mtime: Date) {
+    ) -> FileScan {
         let url = URL(fileURLWithPath: path)
         let sessionId = url.deletingPathExtension().lastPathComponent
         let project = url.deletingLastPathComponent().lastPathComponent
         let (lines, newOffset, size, mtime) = JSONLReader.readNewLines(path: path, offset: offset)
         var events: [UsageEvent] = []
+        var limits: [LimitHit] = []
         var seen = Set<String>()
+        var seenLimits = Set<String>()
         for line in lines {
+            if let hit = LimitLogParser.parseLine(line, source: source) {
+                // The CLI repeats one limit message across every retry; the hit id is
+                // keyed on the reset instant so those collapse to a single event.
+                if seenLimits.insert(hit.id).inserted {
+                    limits.append(hit)
+                }
+                continue
+            }
             guard let event = parseLine(line, source: source, sessionId: sessionId, project: project) else { continue }
             if let mid = event.messageId {
                 if seen.contains(mid) { continue }
@@ -161,7 +188,7 @@ public enum ClaudeParser {
             }
             events.append(event)
         }
-        return (events, newOffset, size, mtime)
+        return FileScan(events: events, limits: limits, newOffset: newOffset, size: size, mtime: mtime)
     }
 
     public static func discoverTranscripts(in root: String) -> [String] {
@@ -208,7 +235,11 @@ public enum KimiParser {
             + JSONLReader.intValue(usage, "cache_creation_input_tokens")
         if inputOther == 0 && output == 0 && cacheRead == 0 && cacheCreate == 0 { return nil }
 
-        let timestamp = JSONLReader.parseDate(obj["timestamp"])
+        // Kimi's `usage.record` carries epoch milliseconds under `time`. Missing that
+        // key meant every Kimi event was stamped with the poll time instead of when it
+        // happened, which put all of its history into the current window.
+        let timestamp = JSONLReader.parseDate(obj["time"])
+            ?? JSONLReader.parseDate(obj["timestamp"])
             ?? JSONLReader.parseDate(obj["ts"])
             ?? JSONLReader.parseDate(obj["created_at"])
             ?? Date()
@@ -218,7 +249,12 @@ public enum KimiParser {
         let messageId = (obj["id"] as? String)
             ?? ((obj["message"] as? [String: Any])?["id"] as? String)
 
-        let id = messageId.map { "kimi-\($0)" } ?? "kimi-\(sessionId)-\(timestamp.timeIntervalSince1970)-\(UUID().uuidString.prefix(8))"
+        // Kimi's wire log carries no message id, so the identity has to be derived from
+        // the record itself. A random suffix would re-insert every row whenever a file
+        // is re-read from offset zero, silently doubling the totals.
+        let fingerprint = "\(inputOther)/\(output)/\(cacheRead)/\(cacheCreate)/\(model)"
+        let id = messageId.map { "kimi-\($0)" }
+            ?? "kimi-\(sessionId)-\(Int(timestamp.timeIntervalSince1970 * 1000))-\(fingerprint.hashValue)"
         return UsageEvent(
             id: id,
             source: .kimi,
@@ -270,212 +306,117 @@ public enum KimiParser {
         return results
     }
 }
+/// What Cursor actually records locally.
+///
+/// Cursor keeps no token counts on disk at all: `ai-code-tracking.db` measures
+/// AI-authored lines of code, and the per-chat `store.db` blobs carry conversation
+/// content with no usage fields. All quota accounting is server side. Rather than
+/// scanning megabytes of chat blobs on every poll looking for token keys that do not
+/// exist, this reports the real signals Cursor does have.
+public struct CursorActivity: Sendable, Equatable {
+    public var requestsByModel: [String: Int]
+    public var linesAdded: Int
+    public var linesRemoved: Int
+    public var lastActivity: Date?
+    public var conversationCount: Int
 
-public struct CursorParseResult: Sendable {
-    public var events: [UsageEvent]
-    public var activityOnly: Bool
-    public var note: String
-
-    public init(events: [UsageEvent], activityOnly: Bool, note: String) {
-        self.events = events
-        self.activityOnly = activityOnly
-        self.note = note
+    public init(
+        requestsByModel: [String: Int] = [:],
+        linesAdded: Int = 0,
+        linesRemoved: Int = 0,
+        lastActivity: Date? = nil,
+        conversationCount: Int = 0
+    ) {
+        self.requestsByModel = requestsByModel
+        self.linesAdded = linesAdded
+        self.linesRemoved = linesRemoved
+        self.lastActivity = lastActivity
+        self.conversationCount = conversationCount
     }
+
+    public var totalRequests: Int {
+        requestsByModel.values.reduce(0, +)
+    }
+
+    public var topModels: [(model: String, requests: Int)] {
+        requestsByModel
+            .sorted { $0.value > $1.value }
+            .prefix(4)
+            .map { (model: $0.key, requests: $0.value) }
+    }
+
+    public static let empty = CursorActivity()
 }
 
 public enum CursorParser {
-    public static func discoverTokenFiles(debugLogs: String) -> [String] {
-        discoverTokenFiles(in: debugLogs)
-    }
+    public static let unavailableNote = "cursor: activity only, token counts are server-side"
 
-    public static func discoverTokenFiles(chats: String) -> [String] {
-        discoverTokenFiles(in: chats)
-    }
-
-    private static func discoverTokenFiles(in root: String) -> [String] {
-        let fm = FileManager.default
-        guard fm.fileExists(atPath: root) else { return [] }
-        var results: [String] = []
-        guard let enumerator = fm.enumerator(atPath: root) else { return [] }
-        while let rel = enumerator.nextObject() as? String {
-            let name = (rel as NSString).lastPathComponent.lowercased()
-            if name.hasSuffix(".jsonl") || name.hasSuffix(".json") || name.hasSuffix(".log") {
-                results.append((root as NSString).appendingPathComponent(rel))
-            }
-        }
-        return results
-    }
-
-    public static func extractFromJSONPublic(_ obj: Any, sessionId: String, project: String) -> [UsageEvent] {
-        extractFromJSON(obj, sessionId: sessionId, project: project)
-    }
-
-    public static func parse(
-        trackingDB: String,
-        debugLogs: String,
-        chats: String
-    ) -> CursorParseResult {
-        var events: [UsageEvent] = []
-        var foundTokens = false
-
-        let logEvents = scanDirectoryForTokens(root: debugLogs, sessionPrefix: "cursor-debug")
-        let chatEvents = scanDirectoryForTokens(root: chats, sessionPrefix: "cursor-chat")
-        events.append(contentsOf: logEvents)
-        events.append(contentsOf: chatEvents)
-        if !logEvents.isEmpty || !chatEvents.isEmpty {
-            foundTokens = true
-        }
-
-        let activity = parseActivityDB(path: trackingDB)
-        if !foundTokens {
-            events.append(contentsOf: activity)
-            return CursorParseResult(
-                events: events,
-                activityOnly: true,
-                note: "cursor: activity only, tokens unavailable"
-            )
-        }
-        let tokenSessions = Set(events.map(\.sessionId))
-        for a in activity where !tokenSessions.contains(a.sessionId) {
-            events.append(a)
-        }
-        return CursorParseResult(
-            events: events,
-            activityOnly: false,
-            note: ""
-        )
-    }
-
-    public static func scanDirectoryForTokens(root: String, sessionPrefix: String) -> [UsageEvent] {
-        let fm = FileManager.default
-        guard fm.fileExists(atPath: root) else { return [] }
-        var events: [UsageEvent] = []
-        guard let enumerator = fm.enumerator(atPath: root) else { return [] }
-        while let rel = enumerator.nextObject() as? String {
-            let full = (root as NSString).appendingPathComponent(rel)
-            let name = (rel as NSString).lastPathComponent.lowercased()
-            if name.hasSuffix(".jsonl") || name.hasSuffix(".json") || name.hasSuffix(".log") {
-                events.append(contentsOf: scanFileForTokens(path: full, sessionId: "\(sessionPrefix)-\(abs(rel.hashValue))"))
-            }
-        }
-        return events
-    }
-
-    public static func scanFileForTokens(path: String, sessionId: String) -> [UsageEvent] {
-        let (lines, _, _, _) = JSONLReader.readNewLines(path: path, offset: 0)
-        var events: [UsageEvent] = []
-        let project = URL(fileURLWithPath: path).deletingLastPathComponent().lastPathComponent
-        for line in lines {
-            if let e = parseTokenLine(line, sessionId: sessionId, project: project) {
-                events.append(e)
-            }
-        }
-        if lines.isEmpty, let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
-           let obj = try? JSONSerialization.jsonObject(with: data) {
-            events.append(contentsOf: extractFromJSON(obj, sessionId: sessionId, project: project))
-        }
-        return events
-    }
-
-    public static func parseTokenLine(_ line: String, sessionId: String, project: String) -> UsageEvent? {
-        guard let obj = JSONLReader.parseJSONObject(line) else {
-            return parseTokenRegex(line, sessionId: sessionId, project: project)
-        }
-        if let usage = obj["usage"] as? [String: Any] {
-            let input = JSONLReader.intValue(usage, "input_tokens")
-                + JSONLReader.intValue(usage, "prompt_tokens")
-                + JSONLReader.intValue(usage, "inputTokens")
-            let output = JSONLReader.intValue(usage, "output_tokens")
-                + JSONLReader.intValue(usage, "completion_tokens")
-                + JSONLReader.intValue(usage, "outputTokens")
-            let cacheRead = JSONLReader.intValue(usage, "cache_read_input_tokens")
-                + JSONLReader.intValue(usage, "cacheReadTokens")
-            let cacheCreate = JSONLReader.intValue(usage, "cache_creation_input_tokens")
-                + JSONLReader.intValue(usage, "cacheWriteTokens")
-            if input + output + cacheRead + cacheCreate == 0 { return nil }
-            let ts = JSONLReader.parseDate(obj["timestamp"]) ?? JSONLReader.parseDate(obj["createdAt"]) ?? Date()
-            let model = (obj["model"] as? String) ?? "cursor"
-            return UsageEvent(
-                id: "cursor-\(sessionId)-\(ts.timeIntervalSince1970)-\(UUID().uuidString.prefix(6))",
-                source: .cursor,
-                sessionId: sessionId,
-                project: project,
-                model: model,
-                timestamp: ts,
-                usage: TokenUsage(
-                    inputTokens: input,
-                    outputTokens: output,
-                    cacheCreationTokens: cacheCreate,
-                    cacheReadTokens: cacheRead
-                ),
-                messageId: obj["id"] as? String
-            )
-        }
-        return nil
-    }
-
-    private static func parseTokenRegex(_ line: String, sessionId: String, project: String) -> UsageEvent? {
-        func capture(_ key: String) -> Int {
-            let pattern = "\"?\(key)\"?\\s*[:=]\\s*(\\d+)"
-            guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else { return 0 }
-            let range = NSRange(line.startIndex..<line.endIndex, in: line)
-            guard let match = regex.firstMatch(in: line, options: [], range: range),
-                  let r = Range(match.range(at: 1), in: line) else { return 0 }
-            return Int(line[r]) ?? 0
-        }
-        let input = capture("input_tokens") + capture("prompt_tokens")
-        let output = capture("output_tokens") + capture("completion_tokens")
-        if input == 0 && output == 0 { return nil }
-        return UsageEvent(
-            id: "cursor-rx-\(UUID().uuidString)",
-            source: .cursor,
-            sessionId: sessionId,
-            project: project,
-            model: "cursor",
-            timestamp: Date(),
-            usage: TokenUsage(inputTokens: input, outputTokens: output),
-            messageId: nil
-        )
-    }
-
-    private static func extractFromJSON(_ obj: Any, sessionId: String, project: String) -> [UsageEvent] {
-        var out: [UsageEvent] = []
-        if let dict = obj as? [String: Any] {
-            if let data = try? JSONSerialization.data(withJSONObject: dict),
-               let line = String(data: data, encoding: .utf8),
-               let e = parseTokenLine(line, sessionId: sessionId, project: project) {
-                out.append(e)
-            }
-            for (_, v) in dict {
-                out.append(contentsOf: extractFromJSON(v, sessionId: sessionId, project: project))
-            }
-        } else if let arr = obj as? [Any] {
-            for v in arr {
-                out.append(contentsOf: extractFromJSON(v, sessionId: sessionId, project: project))
-            }
-        }
-        return out
-    }
-
-    public static func parseActivityDB(path: String) -> [UsageEvent] {
-        guard FileManager.default.fileExists(atPath: path) else { return [] }
+    /// Read activity stats from the AI code-tracking database. Never throws, never
+    /// blocks the other sources, and returns empty rather than partial garbage.
+    public static func parseActivity(trackingDB path: String, since: Date? = nil) -> CursorActivity {
+        guard FileManager.default.fileExists(atPath: path) else { return .empty }
         var db: OpaquePointer?
-        guard sqlite3_open_v2(path, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK, let db else {
-            return []
+        // Opened read-only and immutable so a running Cursor cannot block the poll.
+        let uri = "file:\(path)?immutable=1"
+        guard sqlite3_open_v2(uri, &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_URI, nil) == SQLITE_OK,
+              let db else {
+            if db != nil { sqlite3_close(db) }
+            return .empty
         }
         defer { sqlite3_close(db) }
 
-        var events: [UsageEvent] = []
-        if tableExists(db: db, name: "conversation_summaries") {
-            events.append(contentsOf: readConversationSummaries(db: db))
+        var activity = CursorActivity()
+        let cutoff = since?.timeIntervalSince1970
+
+        if tableExists(db: db, name: "ai_code_hashes") {
+            var stmt: OpaquePointer?
+            defer { sqlite3_finalize(stmt) }
+            let sql = cutoff == nil
+                ? "SELECT model, MAX(timestamp), COUNT(DISTINCT requestId), COUNT(DISTINCT conversationId) FROM ai_code_hashes GROUP BY model"
+                : "SELECT model, MAX(timestamp), COUNT(DISTINCT requestId), COUNT(DISTINCT conversationId) FROM ai_code_hashes WHERE timestamp >= ? GROUP BY model"
+            if sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK {
+                if let cutoff {
+                    // Cursor stores epoch milliseconds in this column.
+                    sqlite3_bind_double(stmt, 1, cutoff * 1000)
+                }
+                var conversations = 0
+                while sqlite3_step(stmt) == SQLITE_ROW {
+                    let model = sqlite3_column_text(stmt, 0).map { String(cString: $0) } ?? "unknown"
+                    let ts = sqlite3_column_double(stmt, 1)
+                    let requests = Int(sqlite3_column_int64(stmt, 2))
+                    conversations += Int(sqlite3_column_int64(stmt, 3))
+                    activity.requestsByModel[model, default: 0] += requests
+                    if ts > 0 {
+                        let date = ts > 1_000_000_000_000
+                            ? Date(timeIntervalSince1970: ts / 1000)
+                            : Date(timeIntervalSince1970: ts)
+                        if activity.lastActivity == nil || date > activity.lastActivity! {
+                            activity.lastActivity = date
+                        }
+                    }
+                }
+                activity.conversationCount = conversations
+            }
         }
+
         if tableExists(db: db, name: "scored_commits") {
-            events.append(contentsOf: readScoredCommits(db: db))
+            var stmt: OpaquePointer?
+            defer { sqlite3_finalize(stmt) }
+            let sql = cutoff == nil
+                ? "SELECT COALESCE(SUM(composerLinesAdded),0), COALESCE(SUM(composerLinesDeleted),0) FROM scored_commits"
+                : "SELECT COALESCE(SUM(composerLinesAdded),0), COALESCE(SUM(composerLinesDeleted),0) FROM scored_commits WHERE scoredAt >= ?"
+            if sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK {
+                if let cutoff {
+                    sqlite3_bind_double(stmt, 1, cutoff * 1000)
+                }
+                if sqlite3_step(stmt) == SQLITE_ROW {
+                    activity.linesAdded = Int(sqlite3_column_int64(stmt, 0))
+                    activity.linesRemoved = Int(sqlite3_column_int64(stmt, 1))
+                }
+            }
         }
-        if events.isEmpty && tableExists(db: db, name: "ai_code_hashes") {
-            events.append(contentsOf: readCodeHashes(db: db))
-        }
-        return events
+
+        return activity
     }
 
     private static func tableExists(db: OpaquePointer, name: String) -> Bool {
@@ -486,117 +427,5 @@ public enum CursorParser {
         }
         sqlite3_bind_text(stmt, 1, name, -1, SQLITE_TRANSIENT)
         return sqlite3_step(stmt) == SQLITE_ROW
-    }
-
-    private static func readConversationSummaries(db: OpaquePointer) -> [UsageEvent] {
-        var stmt: OpaquePointer?
-        defer { sqlite3_finalize(stmt) }
-        let sql = "SELECT * FROM conversation_summaries LIMIT 500"
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
-        var colNames: [String] = []
-        let count = sqlite3_column_count(stmt)
-        for i in 0..<count {
-            if let name = sqlite3_column_name(stmt, i) {
-                colNames.append(String(cString: name).lowercased())
-            } else {
-                colNames.append("")
-            }
-        }
-        var events: [UsageEvent] = []
-        while sqlite3_step(stmt) == SQLITE_ROW {
-            var id = UUID().uuidString
-            var ts = Date()
-            var title = "conversation"
-            for (i, name) in colNames.enumerated() {
-                if name.contains("id"), let t = sqlite3_column_text(stmt, Int32(i)) {
-                    id = String(cString: t)
-                } else if name.contains("time") || name.contains("created") || name.contains("updated") {
-                    if sqlite3_column_type(stmt, Int32(i)) == SQLITE_FLOAT || sqlite3_column_type(stmt, Int32(i)) == SQLITE_INTEGER {
-                        let v = sqlite3_column_double(stmt, Int32(i))
-                        ts = v > 1_000_000_000_000 ? Date(timeIntervalSince1970: v / 1000) : Date(timeIntervalSince1970: v)
-                    } else if let t = sqlite3_column_text(stmt, Int32(i)) {
-                        ts = JSONLReader.parseDate(String(cString: t)) ?? ts
-                    }
-                } else if name.contains("title") || name.contains("summary") || name.contains("name"),
-                          let t = sqlite3_column_text(stmt, Int32(i)) {
-                    title = String(cString: t)
-                }
-            }
-            events.append(UsageEvent(
-                id: "cursor-conv-\(id)",
-                source: .cursor,
-                sessionId: id,
-                project: title,
-                model: "cursor",
-                timestamp: ts,
-                usage: .zero,
-                messageId: id
-            ))
-        }
-        return events
-    }
-
-    private static func readScoredCommits(db: OpaquePointer) -> [UsageEvent] {
-        var stmt: OpaquePointer?
-        defer { sqlite3_finalize(stmt) }
-        guard sqlite3_prepare_v2(db, "SELECT * FROM scored_commits LIMIT 500", -1, &stmt, nil) == SQLITE_OK else { return [] }
-        let count = sqlite3_column_count(stmt)
-        var colNames: [String] = []
-        for i in 0..<count {
-            colNames.append(sqlite3_column_name(stmt, i).map { String(cString: $0).lowercased() } ?? "")
-        }
-        var events: [UsageEvent] = []
-        while sqlite3_step(stmt) == SQLITE_ROW {
-            var id = UUID().uuidString
-            var ts = Date()
-            var project = "commit"
-            for (i, name) in colNames.enumerated() {
-                if (name.contains("hash") || name == "id"), let t = sqlite3_column_text(stmt, Int32(i)) {
-                    id = String(cString: t)
-                } else if name.contains("time") || name.contains("date") {
-                    let v = sqlite3_column_double(stmt, Int32(i))
-                    if v > 0 {
-                        ts = v > 1_000_000_000_000 ? Date(timeIntervalSince1970: v / 1000) : Date(timeIntervalSince1970: v)
-                    }
-                } else if name.contains("repo") || name.contains("path") || name.contains("cwd"),
-                          let t = sqlite3_column_text(stmt, Int32(i)) {
-                    project = String(cString: t)
-                }
-            }
-            events.append(UsageEvent(
-                id: "cursor-commit-\(id)",
-                source: .cursor,
-                sessionId: id,
-                project: project,
-                model: "cursor",
-                timestamp: ts,
-                usage: .zero,
-                messageId: id
-            ))
-        }
-        return events
-    }
-
-    private static func readCodeHashes(db: OpaquePointer) -> [UsageEvent] {
-        var stmt: OpaquePointer?
-        defer { sqlite3_finalize(stmt) }
-        guard sqlite3_prepare_v2(db, "SELECT * FROM ai_code_hashes LIMIT 200", -1, &stmt, nil) == SQLITE_OK else { return [] }
-        var events: [UsageEvent] = []
-        var idx = 0
-        while sqlite3_step(stmt) == SQLITE_ROW {
-            idx += 1
-            let id = "hash-\(idx)"
-            events.append(UsageEvent(
-                id: "cursor-hash-\(id)",
-                source: .cursor,
-                sessionId: id,
-                project: "ai-code",
-                model: "cursor",
-                timestamp: Date(),
-                usage: .zero,
-                messageId: id
-            ))
-        }
-        return events
     }
 }

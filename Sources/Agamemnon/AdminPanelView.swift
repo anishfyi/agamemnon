@@ -3,6 +3,7 @@ import AgamemnonCore
 
 enum AdminSection: String, CaseIterable, Identifiable {
     case overview = "Overview"
+    case suggestions = "Suggestions"
     case sessions = "Sessions"
     case abuse = "Abuse"
     case settings = "Settings"
@@ -12,6 +13,7 @@ enum AdminSection: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .overview: return "chart.xyaxis.line"
+        case .suggestions: return "lightbulb"
         case .sessions: return "list.bullet.rectangle"
         case .abuse: return "exclamationmark.triangle"
         case .settings: return "gearshape"
@@ -35,6 +37,8 @@ struct AdminPanelView: View {
             switch section {
             case .overview:
                 OverviewView()
+            case .suggestions:
+                SuggestionsView()
             case .sessions:
                 SessionsView()
             case .abuse:
@@ -52,18 +56,30 @@ struct OverviewView: View {
 
     var body: some View {
         let snap = appState.snapshot
-        let settings = appState.settings
-        let todayCost = settings.estimateCost(usage: snap.todayTotal)
-        let weekCost = settings.estimateCost(usage: snap.week)
-        let allCost = settings.estimateCost(usage: snap.allTime)
 
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 HStack(spacing: 16) {
-                    StatCard(title: "Today", value: TokenFormat.compact(snap.todayTotal.totalTokens), subtitle: TokenFormat.currency(todayCost))
-                    StatCard(title: "This week", value: TokenFormat.compact(snap.week.totalTokens), subtitle: TokenFormat.currency(weekCost))
-                    StatCard(title: "All-time", value: TokenFormat.compact(snap.allTime.totalTokens), subtitle: TokenFormat.currency(allCost))
-                    StatCard(title: "Burn rate", value: "\(String(format: "%.0f", snap.burnPerMinute)) tok/min", subtitle: "last 15 min")
+                    StatCard(
+                        title: "Today",
+                        value: TokenFormat.currency(snap.todayCost),
+                        subtitle: "\(TokenFormat.compact(snap.todayTotal.totalTokens)) tokens"
+                    )
+                    StatCard(
+                        title: "This week",
+                        value: TokenFormat.currency(snap.weekCost),
+                        subtitle: "\(TokenFormat.compact(snap.week.totalTokens)) tokens"
+                    )
+                    StatCard(
+                        title: "All-time",
+                        value: TokenFormat.currency(snap.allTimeCost),
+                        subtitle: "\(TokenFormat.compact(snap.allTime.totalTokens)) tokens"
+                    )
+                    StatCard(
+                        title: "Burn rate",
+                        value: "\(TokenFormat.compact(Int(snap.burnPerMinute)))/min",
+                        subtitle: "billable, last 15 min"
+                    )
                 }
 
                 HStack {
@@ -76,11 +92,11 @@ struct OverviewView: View {
                 }
 
                 ForEach(snap.sourceStats) { stats in
-                    SourceSpendCard(stats: stats, settings: settings)
+                    SourceSpendCard(stats: stats, cursorActivity: snap.cursorActivity)
                 }
 
                 if snap.sourceStats.isEmpty {
-                    Text("No sources enabled. Turn on kimi, cursor, or claude-work in Settings.")
+                    Text("No sources enabled. Turn on auto-detect, or enable a CLI in Settings.")
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .center)
                         .padding(.vertical, 40)
@@ -93,11 +109,7 @@ struct OverviewView: View {
 
 struct SourceSpendCard: View {
     let stats: SourceSpendStats
-    let settings: AppSettings
-
-    private var limits: SourceWindowLimits {
-        settings.sourceLimits.limits(for: stats.source)
-    }
+    let cursorActivity: CursorActivity
 
     private var stateColor: Color {
         switch stats.state {
@@ -109,60 +121,29 @@ struct SourceSpendCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 8) {
-                        Text(stats.source.displayName)
-                            .font(.headline)
-                        Circle()
-                            .fill(stateColor)
-                            .frame(width: 8, height: 8)
-                        Text(stats.state.rawValue)
-                            .font(.caption)
-                            .foregroundStyle(stateColor)
-                    }
-                    if stats.tokensUnavailable {
-                        Text(stats.activityNote.isEmpty ? "cursor: activity only, tokens unavailable" : stats.activityNote)
-                            .font(.caption)
-                            .foregroundStyle(.orange)
-                    }
-                }
-                Spacer()
-                VStack(alignment: .trailing, spacing: 2) {
-                    Text(TokenFormat.currency(stats.estimatedCost))
-                        .font(.title3.weight(.semibold))
-                        .monospacedDigit()
-                    Text("\(String(format: "%.0f", stats.burnPerMinute)) tok/min")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
+            header
 
-            if !stats.tokensUnavailable {
+            if stats.tokensUnavailable {
+                cursorActivityRow
+            } else {
                 HStack(spacing: 20) {
                     tokenColumn("Input", stats.today.inputTokens)
                     tokenColumn("Output", stats.today.outputTokens)
                     tokenColumn("Cache read", stats.today.cacheReadTokens)
-                    tokenColumn("Cache write", stats.today.cacheCreationTokens)
+                    tokenColumn("Cache write 5m", stats.today.cacheWrite5mTokens)
+                    tokenColumn("Cache write 1h", stats.today.cacheWrite1hTokens)
                 }
                 .font(.caption)
+
+                if stats.session.limit > 0 || stats.weekly.limit > 0 {
+                    UsageWindowBar(title: "Session window", window: stats.session)
+                    UsageWindowBar(title: "Weekly window", window: stats.weekly)
+                } else {
+                    Text("No subscription window applies to this source. Tracking spend only.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
-
-            UsageWindowBar(
-                title: "5-hour window",
-                used: stats.fiveHour.totalTokens,
-                limit: limits.fiveHourTokens,
-                ratio: stats.fiveHourRatio,
-                resetLabel: TokenFormat.resetTime(stats.fiveHourReset)
-            )
-
-            UsageWindowBar(
-                title: "Weekly window",
-                used: stats.sevenDay.totalTokens,
-                limit: limits.weeklyTokens,
-                ratio: stats.weeklyRatio,
-                resetLabel: TokenFormat.resetTime(stats.weeklyReset)
-            )
         }
         .padding(16)
         .background(Color(nsColor: .controlBackgroundColor))
@@ -171,6 +152,75 @@ struct SourceSpendCard: View {
             RoundedRectangle(cornerRadius: 10)
                 .stroke(stateColor.opacity(stats.state == .ok ? 0 : 0.35), lineWidth: 1)
         )
+    }
+
+    private var header: some View {
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    Text(stats.source.displayName)
+                        .font(.headline)
+                    Circle()
+                        .fill(stateColor)
+                        .frame(width: 8, height: 8)
+                    Text(stats.state.rawValue)
+                        .font(.caption)
+                        .foregroundStyle(stateColor)
+                }
+                if let hit = stats.activeLimitHit {
+                    Text(limitBanner(hit))
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.red)
+                }
+                if stats.tokensUnavailable {
+                    Text(stats.activityNote)
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+            }
+            Spacer()
+            VStack(alignment: .trailing, spacing: 2) {
+                Text(TokenFormat.currency(stats.todayCost))
+                    .font(.title3.weight(.semibold))
+                    .monospacedDigit()
+                Text("\(TokenFormat.compact(Int(stats.burnPerMinute)))/min billable")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func limitBanner(_ hit: LimitHit) -> String {
+        guard let reset = hit.resetAt else { return "\(hit.kind.displayName) reached" }
+        let f = DateFormatter()
+        f.timeStyle = .short
+        return "\(hit.kind.displayName) reached, resets \(f.string(from: reset))"
+    }
+
+    @ViewBuilder
+    private var cursorActivityRow: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 20) {
+                tokenColumn("Requests", cursorActivity.totalRequests)
+                tokenColumn("Lines added", cursorActivity.linesAdded)
+                tokenColumn("Lines removed", cursorActivity.linesRemoved)
+                tokenColumn("Conversations", cursorActivity.conversationCount)
+            }
+            .font(.caption)
+
+            if !cursorActivity.topModels.isEmpty {
+                HStack(spacing: 12) {
+                    ForEach(cursorActivity.topModels, id: \.model) { entry in
+                        Text("\(entry.model) \(entry.requests)")
+                            .font(.caption2)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.secondary.opacity(0.12))
+                            .cornerRadius(4)
+                    }
+                }
+            }
+        }
     }
 
     @ViewBuilder
@@ -186,13 +236,10 @@ struct SourceSpendCard: View {
 
 struct UsageWindowBar: View {
     let title: String
-    let used: Int
-    let limit: Int
-    let ratio: Double
-    let resetLabel: String
+    let window: WindowStats
 
     private var barColor: Color {
-        switch SpendState.from(ratio: ratio) {
+        switch SpendState.from(ratio: window.ratio) {
         case .ok: return .accentColor
         case .warning: return .orange
         case .critical: return .red
@@ -204,8 +251,17 @@ struct UsageWindowBar: View {
             HStack {
                 Text(title)
                     .font(.caption.weight(.medium))
+                // Naming the provenance is the whole point: an invented default must
+                // never read as a real quota.
+                Text(window.origin.label)
+                    .font(.caption2)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1)
+                    .background(originColor.opacity(0.15))
+                    .foregroundStyle(originColor)
+                    .cornerRadius(3)
                 Spacer()
-                Text("\(TokenFormat.compact(used)) / \(TokenFormat.compact(limit))")
+                Text("\(TokenFormat.compact(Int(window.billable))) / \(TokenFormat.compact(Int(window.limit))) billable")
                     .font(.caption)
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
@@ -216,13 +272,27 @@ struct UsageWindowBar: View {
                         .fill(Color.secondary.opacity(0.15))
                     RoundedRectangle(cornerRadius: 4)
                         .fill(barColor)
-                        .frame(width: max(0, geo.size.width * min(1, ratio)))
+                        .frame(width: max(0, geo.size.width * min(1, window.ratio)))
                 }
             }
             .frame(height: 8)
-            Text(resetLabel)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+            HStack {
+                Text(TokenFormat.resetTime(window.reset))
+                Spacer()
+                Text(TokenFormat.currency(window.cost))
+                    .monospacedDigit()
+            }
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+        }
+    }
+
+    private var originColor: Color {
+        switch window.origin {
+        case .measured: return .green
+        case .userSet: return .accentColor
+        case .planEstimate: return .orange
+        case .none: return .secondary
         }
     }
 }

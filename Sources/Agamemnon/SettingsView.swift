@@ -9,28 +9,24 @@ struct SettingsView: View {
     var body: some View {
         Form {
             Section("Sources") {
-                Toggle("Claude Code (claude-work)", isOn: $appState.settings.toggles.claudeWork)
-                pathField("Projects path", text: $appState.settings.paths.claudeWorkProjects)
+                Toggle("Auto-detect installed CLIs", isOn: $appState.settings.toggles.autoDetect)
+                Text("When on, any CLI whose data directory exists is monitored without being listed here first.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
 
-                Toggle("Claude Code (~/.claude)", isOn: $appState.settings.toggles.claude)
-                pathField("Projects path", text: $appState.settings.paths.claudeProjects)
-
-                Toggle("Claude Code (personal)", isOn: $appState.settings.toggles.claudePersonal)
-                pathField("Projects path", text: $appState.settings.paths.claudePersonalProjects)
-
-                Toggle("Kimi Code CLI", isOn: $appState.settings.toggles.kimi)
-                pathField("Sessions path", text: $appState.settings.paths.kimiSessions)
-
-                Toggle("Cursor CLI", isOn: $appState.settings.toggles.cursor)
-                pathField("Tracking DB", text: $appState.settings.paths.cursorTrackingDB)
-                pathField("Debug logs", text: $appState.settings.paths.cursorDebugLogs)
-                pathField("Chats", text: $appState.settings.paths.cursorChats)
+                ForEach(TokenSource.dashboardOrder) { source in
+                    sourceRow(source)
+                }
             }
 
-            Section("Source limits") {
-                sourceLimitFields("Kimi", limits: $appState.settings.sourceLimits.kimi)
-                sourceLimitFields("Cursor CLI", limits: $appState.settings.sourceLimits.cursor)
-                sourceLimitFields("Claude-work", limits: $appState.settings.sourceLimits.claudeWork)
+            Section("Window limits") {
+                Text("Limits are in input-token-equivalents: cache reads count at 0.1x and output at its price ratio, matching how spend is actually billed. Leave a field at 0 to use the measured or plan-derived value.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                ForEach(TokenSource.dashboardOrder.filter { $0.hasSubscriptionWindows }) { source in
+                    limitFields(for: source)
+                }
             }
 
             Section("Alert thresholds") {
@@ -61,14 +57,22 @@ struct SettingsView: View {
             }
 
             Section("Pricing (USD per 1M tokens, JSON)") {
+                Text("Each entry may set cacheReadMultiplier, cacheWrite5mMultiplier and cacheWrite1hMultiplier. Defaults are 0.1x, 1.25x and 2x of the input rate.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 TextEditor(text: $pricingText)
                     .font(.system(.body, design: .monospaced))
                     .frame(minHeight: 140)
                 if let pricingError {
                     Text(pricingError).foregroundStyle(.red).font(.caption)
                 }
-                Button("Apply pricing JSON") {
-                    applyPricing()
+                HStack {
+                    Button("Apply pricing JSON") { applyPricing() }
+                    Button("Reset to published prices") {
+                        appState.settings.pricing = AppSettings.defaultPricing
+                        pricingText = appState.settings.pricingJSON
+                        pricingError = nil
+                    }
                 }
             }
 
@@ -96,6 +100,51 @@ struct SettingsView: View {
         }
     }
 
+    // MARK: - Rows
+
+    @ViewBuilder
+    private func sourceRow(_ source: TokenSource) -> some View {
+        let detected = appState.settings.paths.exists(source)
+        VStack(alignment: .leading, spacing: 4) {
+            Toggle(source.displayName, isOn: enabledBinding(source))
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(detected ? Color.green : Color.secondary.opacity(0.4))
+                    .frame(width: 6, height: 6)
+                Text(detected ? "data directory found" : "not installed")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if let plan = appState.snapshot.detectedPlans[source], source.isClaudeFamily {
+                    Text("· \(plan.displayName)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            pathField("Path", text: pathBinding(source))
+        }
+    }
+
+    @ViewBuilder
+    private func limitFields(for source: TokenSource) -> some View {
+        let stats = appState.snapshot.sourceStats.first { $0.source == source }
+        VStack(alignment: .leading, spacing: 4) {
+            Text(source.displayName).font(.subheadline.weight(.medium))
+            if let stats {
+                Text("Currently using \(stats.session.origin.label) limits: session \(TokenFormat.compact(Int(stats.session.limit))), weekly \(TokenFormat.compact(Int(stats.weekly.limit))).")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            LabeledContent("Session override") {
+                TextField("0 = auto", value: limitBinding(source, session: true), format: .number)
+                    .frame(width: 120)
+            }
+            LabeledContent("Weekly override") {
+                TextField("0 = auto", value: limitBinding(source, session: false), format: .number)
+                    .frame(width: 120)
+            }
+        }
+    }
+
     @ViewBuilder
     private func pathField(_ title: String, text: Binding<String>) -> some View {
         LabeledContent(title) {
@@ -103,6 +152,36 @@ struct SettingsView: View {
                 .textFieldStyle(.roundedBorder)
                 .frame(minWidth: 360)
         }
+    }
+
+    // MARK: - Bindings
+
+    private func enabledBinding(_ source: TokenSource) -> Binding<Bool> {
+        Binding(
+            get: { appState.settings.toggles.isEnabled(source, paths: appState.settings.paths) },
+            set: { appState.settings.toggles.set($0, for: source) }
+        )
+    }
+
+    private func pathBinding(_ source: TokenSource) -> Binding<String> {
+        Binding(
+            get: { appState.settings.paths.root(for: source) },
+            set: { appState.settings.paths.setRoot($0, for: source) }
+        )
+    }
+
+    private func limitBinding(_ source: TokenSource, session: Bool) -> Binding<Double> {
+        Binding(
+            get: {
+                let l = appState.settings.sourceLimits.limits(for: source)
+                return session ? l.sessionBillable : l.weeklyBillable
+            },
+            set: { newValue in
+                var l = appState.settings.sourceLimits.limits(for: source)
+                if session { l.sessionBillable = newValue } else { l.weeklyBillable = newValue }
+                appState.settings.sourceLimits.setLimits(l, for: source)
+            }
+        )
     }
 
     private func applyPricing() {
@@ -116,20 +195,6 @@ struct SettingsView: View {
             pricingError = nil
         } catch {
             pricingError = "JSON parse error: \(error.localizedDescription)"
-        }
-    }
-
-    @ViewBuilder
-    private func sourceLimitFields(_ name: String, limits: Binding<SourceWindowLimits>) -> some View {
-        Group {
-            LabeledContent("\(name) 5-hour limit (tokens)") {
-                TextField("", value: limits.fiveHourTokens, format: .number)
-                    .frame(width: 120)
-            }
-            LabeledContent("\(name) weekly limit (tokens)") {
-                TextField("", value: limits.weeklyTokens, format: .number)
-                    .frame(width: 120)
-            }
         }
     }
 }
