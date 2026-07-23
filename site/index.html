@@ -4,18 +4,18 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>agamemnon</title>
-<meta name="description" content="Native macOS menu-bar app that watches token spend across Kimi Code CLI, Cursor CLI, and Claude Code. No network, no telemetry.">
+<meta name="description" content="Native macOS menu-bar app that tracks what your local AI coding CLIs actually cost, priced per model, and how close each one is to its limits. No network, no telemetry.">
 <meta name="theme-color" content="#080605">
 <meta name="color-scheme" content="dark">
 <link rel="canonical" href="https://anishfyi.github.io/agamemnon/">
 <meta property="og:type" content="website">
 <meta property="og:title" content="agamemnon">
-<meta property="og:description" content="Live token spend from the menu bar. Kimi, Cursor CLI, and Claude Code. Everything stays on disk.">
+<meta property="og:description" content="Live spend across ten coding CLIs, priced per model and measured against real limits. Everything stays on disk.">
 <meta property="og:url" content="https://anishfyi.github.io/agamemnon/">
 <meta property="og:image" content="https://anishfyi.github.io/agamemnon/assets/agamemnon-logo.png">
 <meta name="twitter:card" content="summary">
 <meta name="twitter:title" content="agamemnon">
-<meta name="twitter:description" content="Menu-bar token spend monitor for Kimi, Cursor CLI, and Claude Code.">
+<meta name="twitter:description" content="Menu-bar cost and limit tracker for ten local AI coding CLIs. Priced per model, measured, on disk only.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
@@ -282,7 +282,7 @@
     <span class="eyebrow">token spend monitor</span>
     <h1>agamem<em>n</em>on</h1>
     <span class="rule" aria-hidden="true"></span>
-    <p class="tagline">live token burn across <em>kimi</em>, <em>cursor cli</em>, and <em>claude code</em>. on disk only. no network. no telemetry.</p>
+    <p class="tagline">what your coding clis actually cost, priced <em>per model</em>, measured against the limits they <em>really</em> report. on disk only. no network. no telemetry.</p>
     <div class="cta">
       <a class="btn" href="https://github.com/anishfyi/agamemnon">github</a>
       <a class="btn" href="#install">install</a>
@@ -291,23 +291,48 @@
 </main>
 
 <section class="details" id="install">
-  <h2>three clis, one helmet</h2>
-  <p>Agamemnon reads local wire logs, SQLite caches, and JSONL transcripts. Burn rate, rolling limits, estimated cost, and abuse alerts. Everything stays in <code>~/Library/Application Support/Agamemnon/</code>.</p>
+  <h2>ten clis, one helmet</h2>
+  <p>Agamemnon reads local wire logs, SQLite caches, and JSONL transcripts from every coding CLI it can find. Cost is priced per model with the real cache multipliers, so a cache-heavy day reads true instead of triple. Windows are measured against the limits the CLIs actually report, never guessed, and labelled <em>measured</em>, <em>estimated</em>, or <em>user-set</em>. A suggestions tab flags cache thrash, wasteful model mixes, and limit pacing, all computed locally. Everything stays in <code>~/Library/Application Support/Agamemnon/</code>.</p>
   <div class="sources">
     <div class="source">
-      <span class="rank">priority 1</span>
+      <span class="rank">claude, 3 profiles</span>
+      <h3>claude code</h3>
+      <p>full cache split, plus real limit hits and reset times</p>
+    </div>
+    <div class="source">
+      <span class="rank">moonshot</span>
       <h3>kimi code</h3>
-      <p><code>~/.kimi-code/sessions/</code></p>
+      <p>wire logs, per-turn usage records</p>
     </div>
     <div class="source">
-      <span class="rank">priority 2</span>
+      <span class="rank">openai</span>
+      <h3>codex cli</h3>
+      <p>rollout transcripts, per-turn delta</p>
+    </div>
+    <div class="source">
+      <span class="rank">google</span>
+      <h3>gemini cli</h3>
+      <p>per-message token counts</p>
+    </div>
+    <div class="source">
+      <span class="rank">sqlite</span>
+      <h3>opencode</h3>
+      <p>usage nested in the message store</p>
+    </div>
+    <div class="source">
+      <span class="rank">sqlite</span>
+      <h3>crush</h3>
+      <p>session-level totals</p>
+    </div>
+    <div class="source">
+      <span class="rank">github</span>
+      <h3>copilot cli</h3>
+      <p>output tokens only, and the card says so</p>
+    </div>
+    <div class="source">
+      <span class="rank">activity only</span>
       <h3>cursor cli</h3>
-      <p>activity always, tokens when available</p>
-    </div>
-    <div class="source">
-      <span class="rank">priority 3</span>
-      <h3>claude work</h3>
-      <p><code>~/.claude-work/projects/</code></p>
+      <p>no local token counts, so requests and lines instead of a fabricated zero</p>
     </div>
   </div>
   <pre>git clone https://github.com/anishfyi/agamemnon.git
